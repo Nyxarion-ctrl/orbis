@@ -1,0 +1,2275 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ORBIS — esquivá, sobrevivé, un solo toque</title>
+<meta name="description" content="ORBIS: un juego arcade de un solo toque. Cambiá de anillo, esquivá los fragmentos y sobreviví el mayor tiempo posible.">
+<meta name="theme-color" content="#05060f">
+<meta property="og:title" content="ORBIS">
+<meta property="og:description" content="Un juego arcade de un solo toque: cambiá de anillo y sobreviví el caos.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%238b5cf6' stroke-width='2' opacity='0.6'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%2306b6d4'/%3E%3Ccircle cx='27' cy='16' r='2.4' fill='%23ffffff'/%3E%3Ccircle cx='9' cy='23' r='1.8' fill='%23fbbf24'/%3E%3C/svg%3E">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background:#05060f;
+    font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+    user-select:none; -webkit-user-select:none;
+    touch-action:none;
+  }
+  canvas { display:block; touch-action:none; }
+
+  #ui {
+    position:fixed; inset:0; pointer-events:none;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  #hudRow {
+    margin-top:max(14px, env(safe-area-inset-top));
+    display:flex; align-items:center; gap:10px;
+  }
+  #scoreFrame {
+    padding:8px 22px;
+    background:rgba(8,14,26,0.55);
+    box-shadow:inset 0 0 0 1px rgba(6,182,212,0.4), 0 0 14px rgba(6,182,212,0.15);
+    clip-path:polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    opacity:0; transition:opacity .3s;
+  }
+  #scoreFrame.show { opacity:1; }
+  #score {
+    font-family:'Courier New', Consolas, monospace;
+    font-size:30px; font-weight:700; color:#e6faff;
+    text-shadow:0 0 12px rgba(6,182,212,0.8), 0 0 24px rgba(6,182,212,0.4);
+    letter-spacing:2px;
+  }
+
+  /* ---------- Combo / racha ---------- */
+  /* Panel gemelo al de puntaje, en el mismo lenguaje visual (bisel + glow),
+     pero con color de acento propio según el tier de la racha. El color y el
+     glow llegan por JS via --comboColor / --comboGlow, tomados de la misma
+     paleta que ya usan los anillos (COLORS / GLOW), para que "estar en racha"
+     se sienta parte del mismo sistema y no un HUD pegado aparte. */
+  #comboFrame {
+    --comboColor:#06b6d4;
+    --comboGlow:rgba(6,182,212,0.5);
+    min-width:62px;
+    padding:6px 14px;
+    background:rgba(8,14,26,0.55);
+    box-shadow:inset 0 0 0 1px var(--comboColor), 0 0 12px var(--comboGlow);
+    clip-path:polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    opacity:0; transform:scale(0.88);
+    transition:opacity .2s ease, transform .2s ease;
+  }
+  #comboFrame.show { opacity:1; transform:scale(1); }
+  #comboFrame.pulse { animation:comboPulse .3s ease-out; }
+  @keyframes comboPulse {
+    0%   { transform:scale(1.3); }
+    100% { transform:scale(1); }
+  }
+  #comboMult {
+    font-family:'Courier New', Consolas, monospace;
+    font-size:17px; font-weight:700; letter-spacing:1px;
+    text-align:center;
+    color:var(--comboColor);
+    text-shadow:0 0 10px var(--comboColor);
+  }
+  #comboBarTrack {
+    margin-top:4px; width:100%; height:3px;
+    background:rgba(255,255,255,0.14);
+    border-radius:2px; overflow:hidden;
+  }
+  #comboBarFill {
+    width:100%; height:100%;
+    background:var(--comboColor);
+    box-shadow:0 0 6px var(--comboGlow);
+    transform-origin:left center;
+    transform:scaleX(1);
+  }
+
+  /* ---------- Vinieta de pantalla completa al chocar ---------- */
+  /* div fijo por encima del canvas; se enciende con una animación CSS y se
+     apaga sola. No lleva glow constante (display:none visual real es
+     opacity:0), así que no cuesta nada mientras no hay choque. */
+  #hitFlash {
+    position:fixed; inset:0; pointer-events:none; z-index:3;
+    opacity:0;
+  }
+  #hitFlash.hit { animation:hitFlashAnim .55s ease-out; }
+  @keyframes hitFlashAnim {
+    0%   { opacity:0; background:radial-gradient(circle at 50% 50%, rgba(255,120,50,0) 40%, rgba(255,60,20,0) 100%); }
+    14%  { opacity:1; background:radial-gradient(circle at 50% 50%, rgba(255,150,70,0.22) 0%, rgba(255,45,20,0.8) 100%); }
+    100% { opacity:0; background:radial-gradient(circle at 50% 50%, rgba(255,120,50,0) 46%, rgba(255,60,20,0) 100%); }
+  }
+  #fadeOverlay {
+    position:fixed; inset:0; background:#05060f;
+    pointer-events:none; z-index:20; opacity:0;
+    transition:opacity 0.28s ease;
+  }
+  #fadeOverlay.fade-in  { opacity:1; pointer-events:auto; }
+  #fadeOverlay.fade-out { opacity:0; }
+
+  #rotateMsg {
+    display:none;
+    position:fixed; inset:0; z-index:30;
+    background:#05060f;
+    flex-direction:column; align-items:center; justify-content:center; gap:18px;
+    color:#9fb3c8; font-size:15px; letter-spacing:1px; text-align:center;
+  }
+  #rotateMsg svg { width:52px; height:52px; opacity:0.7; animation:rotatePulse 1.8s ease-in-out infinite; }
+  @keyframes rotatePulse { 0%,100%{transform:rotate(0deg);} 50%{transform:rotate(-90deg);} }
+  @media (max-height:430px) and (orientation:landscape) {
+    #rotateMsg { display:flex; }
+  }
+
+  #loadScreen {
+    position:fixed; inset:0; z-index:40; background:#05060f;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    transition:opacity 0.5s ease;
+  }
+  #loadScreen.done { opacity:0; pointer-events:none; }
+  #loadDot {
+    width:10px; height:10px; border-radius:50%; background:#06b6d4;
+    box-shadow:0 0 14px rgba(6,182,212,0.9);
+    animation:loadPulse 0.9s ease-in-out infinite;
+  }
+  @keyframes loadPulse { 0%,100%{transform:scale(1);opacity:1;} 50%{transform:scale(1.7);opacity:0.4;} }
+
+  .overlay {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:24px;
+    pointer-events:none;
+    z-index:10;
+  }
+  .overlay .cta, .overlay .linkBtn { pointer-events:auto; }
+  #startScreen {
+    justify-content:flex-end;
+    padding-top:24px;
+    padding-bottom:max(48px, calc(6vh + env(safe-area-inset-bottom)));
+    gap:0;
+  }
+  .menuTagline {
+    color:#6b8a9e;
+    font-size:clamp(12px, 3vw, 14px);
+    letter-spacing:2px;
+    text-transform:uppercase;
+    margin-bottom:14px !important;
+    margin-top:0 !important;
+  }
+  #menuBest {
+    display:flex; align-items:center; gap:8px;
+    margin-bottom:28px;
+    opacity:0; animation:menuFadeIn .6s ease forwards .28s;
+  }
+  #menuBestLabel {
+    font-family:'Courier New', monospace;
+    font-size:9px; letter-spacing:2px;
+    color:#3c5060; font-weight:600;
+  }
+  #menuBestVal {
+    font-family:'Courier New', monospace;
+    font-size:16px; font-weight:700;
+    color:#06b6d4;
+    text-shadow:0 0 10px rgba(6,182,212,0.5);
+  }
+  .overlay h1 {
+    position:relative;
+    font-size:clamp(36px, 10vw, 56px);
+    font-weight:800; letter-spacing:6px;
+    background:linear-gradient(135deg, #06b6d4, #8b5cf6);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    text-shadow:none;
+    margin-bottom:34px;
+  }
+  /* El logo real del juego (pantalla de inicio) usa los 3 colores de los
+     anillos, no solo 2 — el nombre mismo insinúa "hay 3 anillos" antes de
+     leer una sola línea de instrucciones. El resto de los títulos (game
+     over) conserva el degradé simple de arriba, que es un mensaje distinto,
+     no la marca. */
+  #startScreen h1 {
+    background:linear-gradient(90deg, #06b6d4, #8b5cf6 50%, #fbbf24);
+    -webkit-background-clip:text; background-clip:text;
+  }
+  .overlay h1::after {
+    content:'';
+    position:absolute;
+    left:50%; bottom:-16px;
+    width:64px; height:1px;
+    transform:translateX(-50%);
+    background:linear-gradient(90deg, transparent, rgba(6,182,212,0.8), transparent);
+  }
+  #startScreen h1::after {
+    background:linear-gradient(90deg, rgba(6,182,212,0), rgba(6,182,212,0.9), rgba(139,92,246,0.9), rgba(251,191,36,0.9), rgba(251,191,36,0));
+  }
+  .overlay h1::before {
+    content:'';
+    position:absolute;
+    left:50%; bottom:-19px;
+    width:5px; height:5px; border-radius:50%;
+    transform:translateX(-50%);
+    background:#06b6d4;
+    box-shadow:0 0 8px 2px rgba(6,182,212,0.7);
+  }
+  .overlay p {
+    color:#9fb3c8; font-size:clamp(14px, 3.6vw, 17px);
+    max-width:320px; line-height:1.6; margin-bottom:9px;
+  }
+  .overlay .cta {
+    margin-top:34px;
+    color:#e6faff; font-size:15px; font-weight:600;
+    letter-spacing:1px;
+    padding:14px 38px;
+    background:rgba(8,14,26,0.5);
+    clip-path:polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+    box-shadow:inset 0 0 0 1px rgba(6,182,212,0.55), 0 0 20px rgba(6,182,212,0.25);
+    display:flex; align-items:center; gap:10px;
+    transition:transform .08s ease;
+    animation:pulse 1.6s ease-in-out infinite;
+  }
+  #startScreen .cta {
+    animation:menuFadeIn .6s ease forwards .5s, pulse 1.6s ease-in-out infinite 1.15s;
+  }
+  .cta:active, .linkBtn:active, .iconBtn:active {
+    transform:scale(0.93);
+  }
+  .cta svg { width:15px; height:15px; opacity:0.85; flex-shrink:0; }
+  /* ---------- Tarjeta de resultados (Game Over) ---------- */
+  /* Un solo panel biselado (mismo lenguaje que scoreFrame/comboFrame) en vez
+     de dos líneas de texto sueltas. Borde violeta sutil en reposo; en modo
+     "récord" pasa a ámbar con pulso, reusando la paleta que ya usa el combo
+     para que un mejor puntaje se sienta parte del mismo sistema de premios. */
+  .resultCard {
+    margin-top:10px;
+    padding:22px 34px 20px;
+    min-width:260px;
+    background:rgba(4,8,18,0.82);
+    box-shadow:
+      inset 0 0 0 1px rgba(139,92,246,0.55),
+      inset 0 0 24px rgba(139,92,246,0.08),
+      0 0 32px rgba(139,92,246,0.18);
+    clip-path:polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+    transition:box-shadow .35s ease;
+  }
+  .resultCard.record {
+    box-shadow:
+      inset 0 0 0 1px rgba(251,191,36,0.8),
+      inset 0 0 24px rgba(251,191,36,0.10),
+      0 0 36px rgba(251,191,36,0.30);
+  }
+  .scoreLabel {
+    color:#8fafc4; font-size:10px; font-weight:700; letter-spacing:4px;
+    text-transform:uppercase;
+  }
+  .resultScore {
+    font-family:'Courier New', Consolas, monospace;
+    font-size:52px; font-weight:800; color:#ffffff; line-height:1.1;
+    text-shadow:0 0 20px rgba(6,182,212,0.7), 0 0 40px rgba(6,182,212,0.3);
+  }
+  .recordBadge {
+    display:none;
+    margin-top:4px;
+    color:#ffd479; font-size:10px; font-weight:800; letter-spacing:3px;
+    text-shadow:0 0 10px rgba(251,191,36,0.9);
+  }
+  .resultCard.record .recordBadge {
+    display:block;
+    animation:recordBlink 1.1s ease-in-out infinite;
+  }
+  @keyframes recordBlink {
+    0%, 100% { opacity:1; }
+    50%      { opacity:.4; }
+  }
+  .resultDivider {
+    width:100%; height:1px; margin:16px 0 14px;
+    background:linear-gradient(90deg, transparent, rgba(139,92,246,0.4), rgba(6,182,212,0.4), transparent);
+  }
+  .resultRow { display:flex; gap:28px; justify-content:center; }
+  .resultChip { display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .chipLabel {
+    color:#5a7a8e; font-size:9px; font-weight:800; letter-spacing:3px;
+    text-transform:uppercase;
+  }
+  .chipValue {
+    font-family:'Courier New', Consolas, monospace;
+    font-size:20px; font-weight:700; color:#c9a8ff;
+    text-shadow:0 0 10px rgba(139,92,246,0.8);
+  }
+  #comboChip .chipValue { color:#6ee7f7; text-shadow:0 0 10px rgba(6,182,212,0.8); }
+  #precisionChip .chipValue { color:#fde68a; text-shadow:0 0 10px rgba(251,191,36,0.8); }
+  .resultChip.hidden { display:none; }
+  .deltaHint {
+    margin-top:4px;
+    color:#4a6478; font-size:10px; font-weight:600; letter-spacing:1.5px;
+  }
+  .deltaHint:empty { display:none; }
+  @keyframes pulse {
+    0%,100% { opacity:1; transform:scale(1); }
+    50% { opacity:.65; transform:scale(0.97); }
+  }
+  @keyframes menuFadeIn {
+    from { opacity:0; transform:translateY(14px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
+  #startScreen > h1         { opacity:0; animation:menuFadeIn .6s ease forwards .05s; }
+  #startScreen .menuTagline { opacity:0; animation:menuFadeIn .6s ease forwards .18s; }
+  #startScreen .cta         { animation:menuFadeIn .6s ease forwards .4s, pulse 1.6s ease-in-out infinite 1s; }
+
+  #gameOverScreen > *, #pauseScreen > * { opacity:0; animation:menuFadeIn .5s ease forwards; }
+  #gameOverScreen > *:nth-child(1) { animation-delay:.05s; }
+  #gameOverScreen > *:nth-child(2) { animation-delay:.18s; }
+  #gameOverScreen .cta { animation:menuFadeIn .5s ease forwards .32s, pulse 1.6s ease-in-out infinite .82s; }
+  #gameOverScreen > *:nth-child(4) { animation-delay:.42s; }
+  #pauseScreen > *:nth-child(1) { animation-delay:.03s; }
+  #pauseScreen > *:nth-child(2) { animation-delay:.14s; }
+  #hint {
+    position:fixed; bottom:max(22px, env(safe-area-inset-bottom));
+    width:100%; text-align:center; color:#3c4a58; font-size:10px;
+    letter-spacing:1px; pointer-events:none; opacity:0.6;
+  }
+
+  #topBar {
+    position:fixed; top:max(14px, env(safe-area-inset-top)); right:14px;
+    display:flex; gap:10px; z-index:5;
+  }
+  .iconBtn {
+    pointer-events:auto; cursor:pointer;
+    width:38px; height:38px;
+    background:rgba(8,14,26,0.55);
+    box-shadow:inset 0 0 0 1px rgba(6,182,212,0.45), 0 0 10px rgba(6,182,212,0.15);
+    clip-path:polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    color:#8fe3f4;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .iconBtn svg { width:18px; height:18px; filter:drop-shadow(0 0 4px rgba(6,182,212,0.7)); }
+  #pauseBtn { display:none; }
+
+  #pauseScreen { pointer-events:auto; }
+
+  .linkBtn {
+    pointer-events:auto; cursor:pointer;
+    margin-top:12px;
+    padding:10px 22px;
+    color:#8fb8cc; font-size:11px; font-weight:700;
+    letter-spacing:3px; text-transform:uppercase;
+    background:rgba(4,8,18,0.55);
+    clip-path:polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+    box-shadow:inset 0 0 0 1px rgba(100,140,165,0.35);
+    transition:transform .08s ease;
+  }
+  #gameOverScreen .cta {
+    box-shadow:inset 0 0 0 1px rgba(248,113,113,0.65), 0 0 22px rgba(248,113,113,0.22);
+    margin-top:18px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hitFlash"></div>
+<div id="fadeOverlay"></div>
+<div id="rotateMsg">
+  <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="10" y="6" width="32" height="40" rx="4" stroke="#06b6d4" stroke-width="2"/>
+    <circle cx="26" cy="40" r="2" fill="#06b6d4"/>
+    <path d="M32 18 L26 12 L20 18" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round"/>
+  </svg>
+  <span>Rotá el dispositivo<br>para jugar ORBIS</span>
+</div>
+<div id="loadScreen">
+  <div id="loadDot"></div>
+  <span style="color:#3c5060;font-size:11px;letter-spacing:3px;font-family:'Courier New',monospace;">ORBIS</span>
+</div>
+
+<div id="topBar">
+  <div class="iconBtn" id="soundBtn"></div>
+  <div class="iconBtn" id="pauseBtn"></div>
+</div>
+
+<div id="ui">
+  <div id="hudRow">
+    <div id="scoreFrame"><div id="score">0</div></div>
+    <div id="comboFrame">
+      <div id="comboMult">x2</div>
+      <div id="comboBarTrack"><div id="comboBarFill"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="startScreen">
+  <h1>ORBIS</h1>
+  <p class="menuTagline">Cambiá de anillo. Sobreviví el caos.</p>
+  <div id="menuBest"><span id="menuBestLabel">RÉCORD</span><span id="menuBestVal">—</span></div>
+  <div class="cta"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="2.6" fill="currentColor"/><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.4" opacity="0.5"/></svg>JUGAR</div>
+</div>
+
+<div class="overlay" id="gameOverScreen" style="display:none;">
+  <h1 style="font-size:clamp(22px,6vw,34px); background:linear-gradient(135deg,#f87171,#c084fc); -webkit-background-clip:text; background-clip:text; color:transparent; letter-spacing:5px; margin-bottom:10px;">COLAPSO ORBITAL</h1>
+  <div class="resultCard" id="resultCard">
+    <div class="scoreLabel">PUNTAJE</div>
+    <div class="resultScore" id="finalScore">0</div>
+    <div class="recordBadge">¡NUEVO RÉCORD!</div>
+    <div class="deltaHint" id="deltaHint"></div>
+    <div class="resultDivider"></div>
+    <div class="resultRow">
+      <div class="resultChip">
+        <span class="chipLabel">MEJOR</span>
+        <span class="chipValue" id="bestScoreVal">0</span>
+      </div>
+      <div class="resultChip" id="comboChip">
+        <span class="chipLabel">RACHA MÁX.</span>
+        <span class="chipValue" id="maxComboVal">x1</span>
+      </div>
+      <div class="resultChip" id="precisionChip">
+        <span class="chipLabel">PRECISIÓN</span>
+        <span class="chipValue" id="precisionVal">0</span>
+      </div>
+    </div>
+  </div>
+  <div class="cta">TOCA PARA REINTENTAR</div>
+  <div class="linkBtn" id="menuBtn">VOLVER AL MENÚ</div>
+</div>
+
+<div class="overlay" id="pauseScreen" style="display:none;">
+  <h1 style="font-size:clamp(26px,7vw,38px);">PAUSADO</h1>
+  <p>El núcleo espera.</p>
+  <div class="cta">CONTINUAR</div>
+</div>
+
+<div id="hint">ORBIS · toca para cambiar de anillo · esquivá todo</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const scoreFrameEl = document.getElementById('scoreFrame');
+  const fadeOverlay  = document.getElementById('fadeOverlay');
+
+  function fadeTransition(callback){
+    fadeOverlay.classList.add('fade-in');
+    setTimeout(() => {
+      callback();
+      fadeOverlay.classList.remove('fade-in');
+      fadeOverlay.classList.add('fade-out');
+      setTimeout(() => fadeOverlay.classList.remove('fade-out'), 300);
+    }, 290);
+  }
+  const startScreen = document.getElementById('startScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const pauseScreen = document.getElementById('pauseScreen');
+  const finalScoreEl = document.getElementById('finalScore');
+  const bestScoreValEl = document.getElementById('bestScoreVal');
+  const menuBestValEl = document.getElementById('menuBestVal');
+  const maxComboValEl = document.getElementById('maxComboVal');
+  const precisionChip = document.getElementById('precisionChip');
+  const precisionValEl = document.getElementById('precisionVal');
+  const deltaHintEl = document.getElementById('deltaHint');
+  const resultCard = document.getElementById('resultCard');
+  const soundBtn = document.getElementById('soundBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const menuBtn = document.getElementById('menuBtn');
+  const hitFlash = document.getElementById('hitFlash');
+  const comboFrame = document.getElementById('comboFrame');
+  const comboMultEl = document.getElementById('comboMult');
+  const comboBarFill = document.getElementById('comboBarFill');
+
+  // ---------- Iconografía propia (nada de emojis nativos) ----------
+  // El "núcleo" con ondas retoma el mismo motivo que el núcleo pulsante del juego.
+  const ICON_SOUND_ON =
+    '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+    '<circle cx="6" cy="12" r="2.2" fill="currentColor"/>' +
+    '<path d="M11 6.5 Q16 12 11 17.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+    '<path d="M15 3 Q22.5 12 15 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+    '</svg>';
+  const ICON_SOUND_OFF =
+    '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+    '<circle cx="6" cy="12" r="2.2" fill="currentColor"/>' +
+    '<path d="M11 7 L20 17 M20 7 L11 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+    '</svg>';
+  // Barras de pausa con puntas en bisel, para que combinen con los paneles del HUD.
+  const ICON_PAUSE =
+    '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M7 5 L11.5 5 L11.5 19 L7 19 Z" fill="currentColor"/>' +
+    '<path d="M12.5 5 L17 5 L17 19 L12.5 19 Z" fill="currentColor"/>' +
+    '</svg>';
+  // El "play" reutiliza la silueta de la nave, para que se sienta parte del mismo juego.
+  const ICON_PLAY =
+    '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M6 4 L20 12 L6 20 L9 12 Z" fill="currentColor"/>' +
+    '</svg>';
+
+  function setSoundIcon(on){ soundBtn.innerHTML = on ? ICON_SOUND_ON : ICON_SOUND_OFF; }
+  function setPauseIcon(isPaused){ pauseBtn.innerHTML = isPaused ? ICON_PLAY : ICON_PAUSE; }
+  setSoundIcon(true);
+  setPauseIcon(false);
+
+  const COLORS = ['#06b6d4', '#8b5cf6', '#fbbf24']; // ring 0 cian, ring 1 violeta, ring 2 ámbar
+  const GLOW   = ['rgba(6,182,212,', 'rgba(139,92,246,', 'rgba(251,191,36,'];
+  const RING_COUNT = 3;
+
+  let DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let W = 0, H = 0, cx = 0, cy = 0;
+  let R = [0, 0, 0]; // radios de los tres anillos
+
+  function resize(){
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cx = W / 2; cy = H / 2;
+    const base = Math.min(W, H);
+    R[0] = base * 0.18;
+    R[1] = base * 0.29;
+    R[2] = base * 0.40;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- Estado del juego ----------
+  let state = 'ready'; // 'ready' | 'playing' | 'gameover'
+  let bestScore = (() => { try { return parseInt(localStorage.getItem('orbis_best') || '0', 10); } catch(e){ return 0; } })();
+  let soundOn = true;
+  let paused = false;
+
+  const OBSTACLE_WIDTH = 0.34; // radianes
+  const BASE_SPEED = 1.5;
+  const SPEED_PER_POINT = 0.035;
+  const MAX_SPEED = 4.1;
+
+  let player, obstacles, angularSpeed, score, lastCollisionAt;
+  let safeRing = 0; // qué anillo garantiza el spawner como libre para el próximo obstáculo
+
+  // ---------- Combo/racha + bonus de precisión ----------
+  // `totalClears` mide el progreso real (obstáculos/dobles despejados),
+  // separado de `score` (los puntos mostrados). Antes ambos eran lo mismo
+  // (1 obstáculo = 1 punto), y la dificultad escalaba con `score`. Ahora que
+  // un despeje puede valer x1..x4 (combo) o hasta 12 (precisión en racha
+  // alta), si la dificultad siguiera atada a `score` el juego se aceleraría
+  // de golpe apenas alguien arma una racha. `totalClears` mantiene el ritmo
+  // de dificultad tal cual estaba diseñado, y `score` queda libre para
+  // premiar la racha sin romper el balance.
+  let totalClears = 0;
+  let combo = 0, comboMultiplier = 1, comboTimeLeft = 0, comboWindowDuration = 1;
+  let maxComboMultiplier = 1; // pico de la racha en la partida actual, para la tarjeta de Game Over
+  let precisionCount = 0;     // dobles amenazas despejadas en la partida actual, para la tarjeta de Game Over
+  let pendingGroups = {};   // groupId -> cuántos fragmentos de esa doble amenaza ya se despejaron
+  let groupIdSeq = 0;
+
+  const COMBO_WINDOW_BUFFER = 1.25; // margen sobre el hueco típico entre obstáculos, en segundos
+  const COMBO_WINDOW_MIN = 0.55;    // piso: nunca un margen tan corto que sea injusto
+  const PRECISION_BASE_BONUS = 3;   // puntos base (antes del multiplicador) por despejar una doble amenaza
+  // Tiers ajustables: a partir de qué racha (`need`) se sube de multiplicador,
+  // y qué color de la paleta de anillos (ringIdx en COLORS/GLOW) lo pinta.
+  const COMBO_TIERS = [
+    { need: 0,  mult: 1, ringIdx: null },
+    { need: 3,  mult: 2, ringIdx: 0 }, // cian
+    { need: 6,  mult: 3, ringIdx: 1 }, // violeta
+    { need: 10, mult: 4, ringIdx: 2 }  // ámbar
+  ];
+
+  // ---------- Cielo de fondo: nebulosa + estrellas con profundidad ----------
+  // Paleta igual que Debris Surge: mayormente blanco, con tintes raros de color.
+  const STAR_TINTS = ['255,255,255','255,255,255','255,255,255','165,243,252','196,181,253','253,230,138','249,168,212'];
+
+  // Detección de dispositivo (misma idea que Debris Surge, con un escalón extra
+  // para tablets) para no dibujar la misma cantidad de estrellas en un celular
+  // de gama baja que en una PC de escritorio.
+  const _ua = navigator.userAgent;
+  const _hasTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  const _minDim = Math.min(window.innerWidth, window.innerHeight);
+  const _isPhoneUA = /iPhone|Android.*Mobile|Windows Phone/i.test(_ua);
+  const _isTabletUA = /iPad|Android(?!.*Mobile)/i.test(_ua);
+  let DEVICE_TIER = 'desktop'; // PC / laptop: cantidad completa
+  if (_isPhoneUA || (_hasTouch && _minDim < 480)) DEVICE_TIER = 'phone';
+  else if (_isTabletUA || (_hasTouch && _minDim < 900)) DEVICE_TIER = 'tablet';
+  const STAR_COUNT_SCALE = DEVICE_TIER === 'phone' ? 0.45 : DEVICE_TIER === 'tablet' ? 0.7 : 1;
+
+  let stars = [];
+  const STAR_LAYERS = [
+    { n: 42, rMin: 0.15, rMax: 0.7,  aMin: 0.08, aMax: 0.35, spMin: 0.3, spMax: 1.2 },
+    { n: 20, rMin: 0.5,  rMax: 1.2,  aMin: 0.25, aMax: 0.6,  spMin: 0.6, spMax: 2.0 },
+    { n: 9,  rMin: 1.0,  rMax: 2.0,  aMin: 0.5,  aMax: 1.0,  spMin: 1.0, spMax: 3.0 }
+  ];
+  STAR_LAYERS.forEach((lc, layer) => {
+    const count = Math.max(4, Math.round(lc.n * STAR_COUNT_SCALE));
+    for (let i = 0; i < count; i++){
+      const depth = 0.5 + Math.random() * 1.1; // más alto = más "cerca" (paralaje al rotar)
+      stars.push({
+        a: Math.random() * Math.PI * 2,
+        r: 0.38 + Math.random() * 0.58,
+        size: lc.rMin + Math.random() * (lc.rMax - lc.rMin),
+        baseA: lc.aMin + Math.random() * (lc.aMax - lc.aMin),
+        tw: Math.random() * Math.PI * 2,
+        twSpeed: lc.spMin + Math.random() * (lc.spMax - lc.spMin),
+        depth,
+        layer,
+        tint: STAR_TINTS[Math.floor(Math.random() * STAR_TINTS.length)]
+      });
+    }
+  });
+  const NEBULA_BLOBS = [
+    { xf: 0.22, yf: 0.28, rf: 0.55, color: '99,102,241' },
+    { xf: 0.78, yf: 0.68, rf: 0.5,  color: '6,182,212' },
+    { xf: 0.55, yf: 0.12, rf: 0.4,  color: '139,92,246' },
+    { xf: 0.15, yf: 0.82, rf: 0.38, color: '236,72,153' }
+  ];
+
+  let shootingStars = [];
+  let nextShootingStarAt = 2500 + Math.random() * 3000;
+  let elapsedMs = 0;
+
+  function maybeSpawnShootingStar(){
+    if (elapsedMs >= nextShootingStarAt){
+      spawnShootingStar();
+      nextShootingStarAt = elapsedMs + 4000 + Math.random() * 6000;
+    }
+  }
+  function spawnShootingStar(){
+    const fromLeft = Math.random() < 0.5;
+    const startX = fromLeft ? -30 : W + 30;
+    const startY = Math.random() * H * 0.45;
+    const dirX = fromLeft ? 1 : -1;
+    const speed = (3.5 + Math.random() * 4) * 60; // versión "premium" de Debris Surge, más rápida y con más cola
+    shootingStars.push({
+      x: startX, y: startY,
+      vx: dirX * speed, vy: (1.2 + Math.random() * 2.5) * 60,
+      life: 1.0,
+      len: 70 + Math.random() * 90,
+      decayPerSec: (0.016 + Math.random() * 0.010) * 60
+    });
+  }
+  function updateShootingStars(dt){
+    for (let i = shootingStars.length - 1; i >= 0; i--){
+      const s = shootingStars[i];
+      s.life -= s.decayPerSec * dt;
+      if (s.life <= 0){ shootingStars.splice(i, 1); continue; }
+      s.x += s.vx * dt; s.y += s.vy * dt;
+    }
+  }
+  function drawShootingStars(){
+    // Forma de cometa real (triángulo afinado con la cola detrás del movimiento),
+    // igual a la versión más gruesa/definitiva usada en el fondo de Debris Surge.
+    ctx.save();
+    for (const s of shootingStars){
+      const life = s.life;
+      const tx = s.x - s.vx * (s.len / 60) * life;
+      const ty = s.y - s.vy * (s.len / 60) * life;
+      const ang = Math.atan2(s.vy, s.vx);
+      const perpX = -Math.sin(ang), perpY = Math.cos(ang);
+      const headW = 2.6 * life;
+      const grad = ctx.createLinearGradient(s.x, s.y, tx, ty);
+      grad.addColorStop(0, `rgba(255,255,255,${life.toFixed(2)})`);
+      grad.addColorStop(0.3, `rgba(180,240,255,${(life*0.55).toFixed(2)})`);
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.beginPath();
+      ctx.moveTo(s.x + perpX*headW, s.y + perpY*headW);
+      ctx.lineTo(s.x - perpX*headW, s.y - perpY*headW);
+      ctx.lineTo(tx, ty);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 2.2 * life, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${(life*0.9).toFixed(2)})`;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawNebula(){
+    ctx.save();
+    for (const b of NEBULA_BLOBS){
+      const bx = b.xf * W, by = b.yf * H, br = b.rf * Math.min(W, H);
+      const g = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+      g.addColorStop(0, `rgba(${b.color},0.11)`);
+      g.addColorStop(1, `rgba(${b.color},0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  let starRotation = 0;
+  let menuDotAngle = 0;
+  let menuEnteredAt = performance.now();
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SISTEMA DE AUDIO — dos motores completamente separados
+  // ─ menuMusic  : ambiental espacial, solo en el menú principal
+  // ─ gameMusic  : dinámico, escala con la velocidad, solo durante el juego
+  // Cada uno arranca desde cero cuando su pantalla aparece y se detiene
+  // completamente (no pausa) cuando la pantalla cambia.
+  // ═══════════════════════════════════════════════════════════════════════
+  let audioCtx = null;
+
+  // Nodos de volumen maestro para cada motor
+  let menuMasterGain = null;
+  let gameMasterGain = null;
+
+  // Identificadores de loop para poder cancelarlos
+  let menuLoopTimer = null;
+  let gameLoopTimer = null;
+  let gameLoopStart = 0;
+
+  function ensureAudio(){
+    if (!audioCtx){
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch(e){ audioCtx = null; return; }
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    // Arrancar la música del menú la primera vez que el usuario toca algo
+    if (state === 'ready' && !menuMasterGain) startMenuMusic();
+  }
+
+  // ── Herramientas compartidas ────────────────────────────────────────────
+  function makeReverb(duration, decay){
+    const len = audioCtx.sampleRate * duration;
+    const buf = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+    for (let c = 0; c < 2; c++){
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < len; i++)
+        d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, decay);
+    }
+    const conv = audioCtx.createConvolver();
+    conv.buffer = buf; return conv;
+  }
+  function makeComp(threshold, ratio){
+    const c = audioCtx.createDynamicsCompressor();
+    c.threshold.value = threshold; c.knee.value = 6;
+    c.ratio.value = ratio; c.attack.value = 0.003; c.release.value = 0.2;
+    return c;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // MOTOR 1 — MENÚ: ambiental espacial, atmosférico y etéreo
+  // Basado en drones desintonizados + pad espacioso + gotas de melodía
+  // muy espaciadas. Sin ritmo marcado — el menú no presiona al jugador.
+  // ══════════════════════════════════════════════════════════════════════
+  function startMenuMusic(){
+    if (!audioCtx || !soundOn) return;
+    stopMenuMusic();
+
+    menuMasterGain = audioCtx.createGain();
+    menuMasterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    menuMasterGain.gain.linearRampToValueAtTime(0.32, audioCtx.currentTime + 2.0);
+    menuMasterGain.connect(audioCtx.destination);
+
+    const comp = makeComp(-18, 3);
+    comp.connect(menuMasterGain);
+    const reverb = makeReverb(3.5, 2.0);
+    const rvGain = audioCtx.createGain(); rvGain.gain.value = 0.55;
+    reverb.connect(rvGain); rvGain.connect(comp);
+
+    // ── Drones de fondo: dos osciladores ligeramente desafinados ─────────
+    // Efecto de "latido cósmico" (beating) que da sensación de espacio
+    [54.8, 55.3].forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      const g = audioCtx.createGain(); g.gain.value = 0.18 - i * 0.04;
+      osc.connect(g); g.connect(comp); g.connect(reverb);
+      osc.start();
+      // vibrato muy lento (LFO a 0.15Hz — una oscilación cada ~7s)
+      const lfo = audioCtx.createOscillator(); lfo.frequency.value = 0.15 + i * 0.07;
+      const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.4;
+      lfo.connect(lfoG); lfoG.connect(osc.frequency);
+      lfo.start();
+    });
+
+    // ── Pad espacioso: Dm7 abierto (D2, F2, A2, C3) con ataque muy lento ─
+    const PAD = [73.42, 87.31, 110.00, 130.81];
+    PAD.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, audioCtx.currentTime);
+      g.gain.linearRampToValueAtTime(0.06 / (i + 1), audioCtx.currentTime + 4.0);
+      osc.connect(g); g.connect(reverb);
+      osc.start();
+    });
+
+    // ── Gotas de melodía: notas sueltas y espaciadas, escala D menor ─────
+    const DROPS = [220, 261.63, 293.66, 329.63, 392, 440];
+    const MENU_BAR = 6.0; // segundos por "compás" del menú
+    let menuLoopT = audioCtx.currentTime + 1.5;
+
+    function scheduleMenuDrop(){
+      // 2-3 gotas por "compás", muy separadas
+      const count = 2 + Math.floor(Math.random() * 2);
+      for (let n = 0; n < count; n++){
+        const t = menuLoopT + (n / count) * MENU_BAR * 0.85 + Math.random() * 0.8;
+        const freq = DROPS[Math.floor(Math.random() * DROPS.length)];
+        const oct = Math.random() < 0.3 ? 2 : 1;
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sine'; osc.frequency.value = freq * oct;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.07, t + 0.08);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 2.8);
+        osc.connect(g); g.connect(reverb); g.connect(comp);
+        osc.start(t); osc.stop(t + 3.0);
+      }
+      menuLoopT += MENU_BAR;
+      const ms = (menuLoopT - audioCtx.currentTime - 0.8) * 1000;
+      menuLoopTimer = setTimeout(scheduleMenuDrop, Math.max(ms, 100));
+    }
+    scheduleMenuDrop();
+  }
+
+  function stopMenuMusic(){
+    if (menuLoopTimer){ clearTimeout(menuLoopTimer); menuLoopTimer = null; }
+    if (menuMasterGain){
+      try {
+        menuMasterGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.3);
+        setTimeout(() => { try { menuMasterGain.disconnect(); } catch(e){} }, 1500);
+      } catch(e){}
+      menuMasterGain = null;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // MOTOR 2 — GAMEPLAY: dinámico, escala con angularSpeed del juego
+  // Tres capas que se activan progresivamente según la velocidad:
+  //   Capa 1 (siempre): bajo pulsante + pad Am7 — ritmo base tranquilo
+  //   Capa 2 (velocidad media): arpejo en corcheas — tensión moderada
+  //   Capa 3 (velocidad alta): percusión sintetizada + arpejo rápido
+  // ══════════════════════════════════════════════════════════════════════
+  let gameLayerGains = []; // gains de cada capa, para subirlos/bajarlos
+
+  function startGameMusic(){
+    if (!audioCtx || !soundOn) return;
+    stopGameMusic();
+
+    gameMasterGain = audioCtx.createGain();
+    gameMasterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    gameMasterGain.gain.linearRampToValueAtTime(0.36, audioCtx.currentTime + 1.2);
+    gameMasterGain.connect(audioCtx.destination);
+
+    const comp = makeComp(-14, 4);
+    comp.connect(gameMasterGain);
+    const reverb = makeReverb(1.4, 3.5);
+    const rvGain = audioCtx.createGain(); rvGain.gain.value = 0.22;
+    reverb.connect(rvGain); rvGain.connect(comp);
+
+    const BPM = 132; // más rápido que antes, acorde al juego
+    const BEAT = 60 / BPM;
+    const BAR  = BEAT * 4;
+    const SCALE = [110, 130.81, 146.83, 164.81, 196.00, 220.00]; // Am pent.
+
+    // Capa 0 — base (siempre activa)
+    const baseGain = audioCtx.createGain(); baseGain.gain.value = 1.0;
+    baseGain.connect(comp);
+    // Capa 1 — arpejo (se activa a velocidad media)
+    const arpGain = audioCtx.createGain(); arpGain.gain.value = 0.0;
+    arpGain.connect(comp); arpGain.connect(reverb);
+    // Capa 2 — percusión + arpejo rápido (se activa a velocidad alta)
+    const percGain = audioCtx.createGain(); percGain.gain.value = 0.0;
+    percGain.connect(comp);
+    gameLayerGains = [baseGain, arpGain, percGain];
+
+    gameLoopStart = audioCtx.currentTime + 0.08;
+    const LOOP_BARS = 2;
+
+    // ── Bajo pulsante ─────────────────────────────────────────────────────
+    function scheduleBass(t0, bars){
+      for (let b = 0; b < bars * 4; b++){
+        const t = t0 + b * BEAT;
+        const osc = audioCtx.createOscillator();
+        osc.type = 'triangle'; osc.frequency.value = 55;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.55, t + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.001, t + BEAT * 0.6);
+        osc.connect(g); g.connect(baseGain);
+        osc.start(t); osc.stop(t + BEAT * 0.65);
+      }
+    }
+
+    // ── Pad Am7 ───────────────────────────────────────────────────────────
+    function schedulePad(t0, bars){
+      [110, 130.81, 164.81, 196.00].forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        osc.type = 'triangle'; osc.frequency.value = freq;
+        const dur = BAR * bars;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(0.10 / (i + 1), t0 + 0.4);
+        g.gain.setValueAtTime(0.10 / (i + 1), t0 + dur - 0.5);
+        g.gain.linearRampToValueAtTime(0, t0 + dur);
+        osc.connect(g); g.connect(baseGain); g.connect(reverb);
+        osc.start(t0); osc.stop(t0 + dur + 0.1);
+      });
+    }
+
+    // ── Arpejo en corcheas (capa 1) ───────────────────────────────────────
+    function scheduleArp(t0, bars, fast){
+      const pat = [0, 2, 4, 5, 4, 2, 3, 5];
+      const step = fast ? BEAT / 4 : BEAT / 2;
+      const total = Math.round(bars * BAR / step);
+      for (let s = 0; s < total; s++){
+        const t = t0 + s * step;
+        const freq = SCALE[pat[s % pat.length]] * (fast ? 4 : 2);
+        const osc = audioCtx.createOscillator();
+        osc.type = 'triangle'; osc.frequency.value = freq;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.06, t + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.001, t + step * 0.6);
+        osc.connect(g); g.connect(arpGain);
+        osc.start(t); osc.stop(t + step * 0.7);
+      }
+    }
+
+    // ── Percusión sintetizada (capa 2): bombo + hi-hat ───────────────────
+    function schedulePerc(t0, bars){
+      for (let b = 0; b < bars * 4; b++){
+        const t = t0 + b * BEAT;
+        // bombo en 1 y 3
+        if (b % 2 === 0){
+          const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.18, audioCtx.sampleRate);
+          const d = buf.getChannelData(0);
+          for (let i = 0; i < d.length; i++)
+            d[i] = (Math.random()*2-1) * Math.exp(-i / (audioCtx.sampleRate * 0.04));
+          const src = audioCtx.createBufferSource(); src.buffer = buf;
+          const lp = audioCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 200;
+          const g = audioCtx.createGain(); g.gain.value = 0.5;
+          src.connect(lp); lp.connect(g); g.connect(percGain);
+          src.start(t);
+        }
+        // hi-hat en todos los beats
+        const hbuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.06, audioCtx.sampleRate);
+        const hd = hbuf.getChannelData(0);
+        for (let i = 0; i < hd.length; i++)
+          hd[i] = (Math.random()*2-1) * Math.exp(-i / (audioCtx.sampleRate * 0.012));
+        const hsrc = audioCtx.createBufferSource(); hsrc.buffer = hbuf;
+        const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6000;
+        const hg = audioCtx.createGain(); hg.gain.value = 0.18;
+        hsrc.connect(hp); hp.connect(hg); hg.connect(percGain);
+        hsrc.start(t);
+      }
+    }
+
+    function scheduleGameLoop(){
+      scheduleBass(gameLoopStart, LOOP_BARS);
+      schedulePad(gameLoopStart, LOOP_BARS);
+      // La velocidad del juego decide cuántas capas suenan.
+      // angularSpeed va de BASE_SPEED (~1.5) a MAX_SPEED (~4.1).
+      const spd = (typeof angularSpeed !== 'undefined') ? angularSpeed : BASE_SPEED;
+      const t = (spd - BASE_SPEED) / (MAX_SPEED - BASE_SPEED); // 0.0 → 1.0
+      if (t > 0.2) scheduleArp(gameLoopStart, LOOP_BARS, t > 0.65);
+      if (t > 0.55) schedulePerc(gameLoopStart, LOOP_BARS);
+
+      gameLoopStart += BAR * LOOP_BARS;
+      const ms = (gameLoopStart - audioCtx.currentTime - 0.6) * 1000;
+      gameLoopTimer = setTimeout(scheduleGameLoop, Math.max(ms, 50));
+    }
+    scheduleGameLoop();
+
+    // ── Ajustador de capas: corre cada 2s, sube/baja las capas según spd ─
+    function updateGameLayers(){
+      if (!gameMasterGain) return;
+      const spd = (typeof angularSpeed !== 'undefined') ? angularSpeed : BASE_SPEED;
+      const t = Math.max(0, Math.min(1, (spd - BASE_SPEED) / (MAX_SPEED - BASE_SPEED)));
+      const arpVol  = t > 0.2 ? Math.min((t - 0.2) / 0.45, 1) : 0;
+      const percVol = t > 0.55 ? Math.min((t - 0.55) / 0.35, 1) : 0;
+      const now = audioCtx.currentTime;
+      arpGain.gain.setTargetAtTime(arpVol, now, 0.8);
+      percGain.gain.setTargetAtTime(percVol * 0.7, now, 0.8);
+      setTimeout(updateGameLayers, 2000);
+    }
+    updateGameLayers();
+  }
+
+  function stopGameMusic(){
+    if (gameLoopTimer){ clearTimeout(gameLoopTimer); gameLoopTimer = null; }
+    if (gameMasterGain){
+      try {
+        gameMasterGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.25);
+        setTimeout(() => { try { gameMasterGain.disconnect(); } catch(e){} }, 1200);
+      } catch(e){}
+      gameMasterGain = null;
+    }
+    gameLayerGains = [];
+  }
+
+  // musicGain se mantiene como alias para el botón de mute
+  let musicGain = null;
+  function beep(freq, dur, type, vol){
+    if (!audioCtx || !soundOn) return;
+    const t0 = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(vol || 0.16, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.02);
+  }
+  // Patrón de salto en ola: 0→1→2→1→0→1→2→1→0...
+  // Nunca salta más de un anillo a la vez. Al llegar al extremo invierte.
+  function jumpRing(){
+    const next = player.ring + player.ringDir;
+    if (next >= RING_COUNT){ player.ringDir = -1; player.ring = RING_COUNT - 2; }
+    else if (next < 0)     { player.ringDir =  1; player.ring = 1; }
+    else                   { player.ring = next; }
+  }
+
+  // Cada anillo tiene su tono propio, reforzando la lectura por audio:
+  // ring 0 cian → 660Hz agudo / ring 1 violeta → 440Hz medio / ring 2 ámbar → 330Hz grave
+  const RING_TONES = [660, 440, 330];
+  function playSwitchSound(ring){ beep(RING_TONES[ring] || 440, 0.07, 'triangle', 0.12); }
+  function playScoreSound(mult){
+    const m = mult || 1;
+    beep(1040 + (m - 1) * 90, 0.05, 'sine', 0.07); // más aguda cuanto más alto el multiplicador
+  }
+  function playPrecisionSound(){
+    beep(900, 0.06, 'triangle', 0.11);
+    setTimeout(() => beep(1350, 0.09, 'triangle', 0.12), 55);
+  }
+  function playGameOverSound(){
+    beep(220, 0.12, 'sawtooth', 0.15);
+    setTimeout(() => beep(140, 0.24, 'sawtooth', 0.13), 90);
+  }
+
+  // ---------- Partículas y screen shake ----------
+  let particles = [];
+  let shockwaves = [];
+  let shakeMag = 0;
+  function triggerShake(mag){ shakeMag = mag; }
+
+  // Sonido de destrucción: impacto sordo + crujido metálico + silbido de descarga
+  function playDestructionSound(){
+    if (!audioCtx || !soundOn) return;
+    const t0 = audioCtx.currentTime;
+    // impacto bajo sordo
+    const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.3, audioCtx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioCtx.sampleRate * 0.06));
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 280;
+    const gn = audioCtx.createGain(); gn.gain.value = 0.6;
+    src.connect(lp); lp.connect(gn); gn.connect(audioCtx.destination);
+    src.start(t0);
+    // crujido metálico
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth'; osc.frequency.setValueAtTime(340, t0);
+    osc.frequency.exponentialRampToValueAtTime(60, t0 + 0.22);
+    const g2 = audioCtx.createGain();
+    g2.gain.setValueAtTime(0.22, t0);
+    g2.gain.exponentialRampToValueAtTime(0.001, t0 + 0.22);
+    osc.connect(g2); g2.connect(audioCtx.destination);
+    osc.start(t0); osc.stop(t0 + 0.23);
+    // silbido de descarga de energía
+    const osc2 = audioCtx.createOscillator();
+    osc2.type = 'sine'; osc2.frequency.setValueAtTime(1200, t0 + 0.05);
+    osc2.frequency.exponentialRampToValueAtTime(180, t0 + 0.45);
+    const g3 = audioCtx.createGain();
+    g3.gain.setValueAtTime(0.12, t0 + 0.05);
+    g3.gain.exponentialRampToValueAtTime(0.001, t0 + 0.45);
+    osc2.connect(g3); g3.connect(audioCtx.destination);
+    osc2.start(t0 + 0.05); osc2.stop(t0 + 0.46);
+  }
+
+  function spawnBurst(x, y, color){
+    // ── Onda de choque ──────────────────────────────────────────────────
+    shockwaves.push({ x, y, r: 0, maxR: 55, age: 0, life: 0.45, color });
+
+    // ── Fragmentos de casco: polígonos irregulares que reconocés como "trozos de nave" ──
+    const hullShapes = [
+      [[8,0],[2,4],[-3,2],[-2,-1]],        // punta frontal
+      [[4,3],[0,8],[-4,4],[-2,1]],          // ala derecha
+      [[4,-3],[0,-8],[-4,-4],[-2,-1]],      // ala izquierda
+      [[-3,2],[-6,1],[-6,-1],[-3,-2]]       // escudo trasero
+    ];
+    const heading = player.angle + Math.PI/2;
+    hullShapes.forEach((pts, idx) => {
+      const ejA = heading + (idx / hullShapes.length) * Math.PI * 2 + Math.random() * 0.6;
+      const ejSpd = 80 + Math.random() * 140;
+      particles.push({
+        type: 'hull', x, y,
+        vx: Math.cos(ejA) * ejSpd, vy: Math.sin(ejA) * ejSpd,
+        vr: (Math.random() - 0.5) * 8,
+        rot: 0,
+        age: 0, life: 0.7 + Math.random() * 0.5,
+        color: '#d4eef8', accentColor: color,
+        pts
+      });
+    });
+
+    // ── Chispas de energía: partículas rápidas del color del anillo ──────
+    for (let i = 0; i < 18; i++){
+      const a = Math.random() * Math.PI * 2;
+      const spd = 120 + Math.random() * 220;
+      particles.push({
+        type: 'spark', x, y,
+        vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        age: 0, life: 0.3 + Math.random() * 0.3,
+        color
+      });
+    }
+
+    // ── Humo: partículas grandes, lentas y oscuras ───────────────────────
+    for (let i = 0; i < 6; i++){
+      const a = Math.random() * Math.PI * 2;
+      const spd = 20 + Math.random() * 50;
+      particles.push({
+        type: 'smoke', x, y,
+        vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        age: 0, life: 0.8 + Math.random() * 0.4,
+        size: 8 + Math.random() * 12,
+        color: `rgba(100,120,140,`
+      });
+    }
+  }
+
+  function updateParticles(dt){
+    for (let i = particles.length - 1; i >= 0; i--){
+      const p = particles[i];
+      p.age += dt;
+      if (p.age >= p.life){ particles.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= (1 - dt * 2.2); p.vy *= (1 - dt * 2.2);
+      if (p.type === 'hull') p.rot += p.vr * dt;
+    }
+    for (let i = shockwaves.length - 1; i >= 0; i--){
+      const s = shockwaves[i];
+      s.age += dt;
+      if (s.age >= s.life){ shockwaves.splice(i, 1); continue; }
+      s.r = (s.age / s.life) * s.maxR;
+    }
+  }
+
+  function drawParticles(){
+    ctx.save();
+
+    // ── Ondas de choque ─────────────────────────────────────────────────
+    for (const s of shockwaves){
+      const t = 1 - s.age / s.life;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2.5 * t;
+      ctx.globalAlpha = t * 0.7;
+      ctx.stroke();
+      // segunda onda interior más pequeña
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r * 0.55, 0, Math.PI * 2);
+      ctx.lineWidth = 1.2 * t;
+      ctx.globalAlpha = t * 0.35;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    for (const p of particles){
+      const t = Math.max(1 - p.age / p.life, 0);
+
+      if (p.type === 'hull'){
+        // fragmento de casco: polígono rotando
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.globalAlpha = t;
+        ctx.beginPath();
+        p.pts.forEach(([px, py], idx) => idx === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py));
+        ctx.closePath();
+        const hg = ctx.createLinearGradient(-4, -4, 4, 4);
+        hg.addColorStop(0, '#ffffff'); hg.addColorStop(1, p.accentColor);
+        ctx.fillStyle = hg;
+        ctx.fill();
+        ctx.strokeStyle = p.accentColor;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.restore();
+
+      } else if (p.type === 'spark'){
+        // chispa: trazo corto con halo interno
+        ctx.globalAlpha = t * 0.3;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4 * t, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = t;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.5 * t, 0, Math.PI * 2);
+        ctx.fill();
+
+      } else if (p.type === 'smoke'){
+        // humo: círculo grande y muy transparente
+        ctx.globalAlpha = t * 0.18;
+        ctx.fillStyle = p.color + (t * 0.5).toFixed(2) + ')';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * (1 + (1 - t) * 0.8), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ---------- "+1" flotante al despejar un obstáculo ----------
+  let floatingTexts = [];
+  function spawnFloatingText(x, y, text, color){
+    floatingTexts.push({ x, y, text, color, age: 0, life: 0.7 });
+  }
+  function updateFloatingTexts(dt){
+    for (let i = floatingTexts.length - 1; i >= 0; i--){
+      const f = floatingTexts[i];
+      f.age += dt;
+      if (f.age >= f.life){ floatingTexts.splice(i, 1); continue; }
+      f.y -= dt * 38;
+    }
+  }
+  function drawFloatingTexts(){
+    ctx.save();
+    ctx.font = '700 15px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    for (const f of floatingTexts){
+      const t = 1 - f.age / f.life;
+      ctx.globalAlpha = Math.max(t, 0);
+      ctx.fillStyle = f.color;
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.restore();
+  }
+
+  function shade(hex, percent){
+    const num = parseInt(hex.slice(1), 16);
+    let r = (num >> 16) & 0xff, g = (num >> 8) & 0xff, b = num & 0xff;
+    r = Math.round(percent < 0 ? r * (1 + percent) : r + (255 - r) * percent);
+    g = Math.round(percent < 0 ? g * (1 + percent) : g + (255 - g) * percent);
+    b = Math.round(percent < 0 ? b * (1 + percent) : b + (255 - b) * percent);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function randomRockPoints(n){
+    const pts = [];
+    for (let i = 0; i < n; i++){
+      const a = (i / n) * Math.PI * 2;
+      const r = 0.55 + Math.random() * 0.45;
+      pts.push({ a, r });
+    }
+    return pts;
+  }
+
+  // Silueta redondeada y casi lisa, para el cuerpo principal de un planeta —
+  // mismo estilo de shape que el resto, solo que muy poco jitter.
+  function randomOrbPoints(n){
+    const pts = [];
+    for (let i = 0; i < n; i++){
+      const a = (i / n) * Math.PI * 2;
+      const r = 0.92 + Math.random() * 0.08;
+      pts.push({ a, r });
+    }
+    return pts;
+  }
+
+  // Picos alternados largo/corto, tipo esquirla de cristal — una silueta
+  // filosa y puntiaguda, muy distinta a la rugosidad pareja de un meteoro.
+  function randomCrystalPoints(n){
+    const pts = [];
+    for (let i = 0; i < n; i++){
+      const a = (i / n) * Math.PI * 2;
+      const r = (i % 2 === 0) ? 0.95 + Math.random() * 0.15 : 0.35 + Math.random() * 0.15;
+      pts.push({ a, r });
+    }
+    return pts;
+  }
+
+  // Manchas de superficie reutilizables (cráteres de roca / continentes de
+  // planeta): una lista en vez de un solo punto, para poder darle 2-3 al
+  // cuerpo grande de un planeta y que se note como textura de superficie.
+  function craterSpots(count, minR, maxR){
+    const spots = [];
+    for (let i = 0; i < count; i++){
+      spots.push({
+        angle: Math.random() * Math.PI * 2,
+        dist: 0.2 + Math.random() * 0.4,
+        r: minR + Math.random() * (maxR - minR)
+      });
+    }
+    return spots;
+  }
+
+  // Qué clase de obstáculo aparece: antes solo había meteoros; ahora se
+  // reparte entre 3 diseños con estructuras realmente distintas (no solo
+  // color/roughness), con pesos ajustables acá mismo. Es puramente visual —
+  // el hitbox sigue siendo o.angle/o.width/o.ring, así que agregar tipos
+  // nunca cambia el balance del juego.
+  const OBSTACLE_TYPE_WEIGHTS = [
+    { type: 'meteor',  weight: 0.5 },
+    { type: 'crystal', weight: 0.25 },
+    { type: 'planet',  weight: 0.25 }
+  ];
+  function pickObstacleType(){
+    const r = Math.random();
+    let acc = 0;
+    for (const w of OBSTACLE_TYPE_WEIGHTS){
+      acc += w.weight;
+      if (r <= acc) return w.type;
+    }
+    return 'meteor';
+  }
+
+  // Racimo de 4 rocas dispersas — el diseño original, sin cambios.
+  function buildMeteorChunks(width){
+    const count = 4;
+    const chunks = [];
+    for (let i = 0; i < count; i++){
+      const t = (i + 0.5) / count;
+      const isCore = i === 0; // la pieza más grande, "líder" del racimo
+      chunks.push({
+        angleOffset: (t - 0.5) * width * 0.85 + (Math.random()-0.5)*0.05,
+        radiusJitter: (Math.random() - 0.5) * 8,  // reducido de ±16 a ±8 para alinear con hitbox
+        size: isCore ? 13 + Math.random() * 5 : 6 + Math.random() * 6,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 1.4,
+        shape: randomRockPoints(7 + Math.floor(Math.random() * 3)),
+        craters: Math.random() < 0.45 ? craterSpots(1, 0.18, 0.26) : [],
+        glassy: false,
+        isRing: false
+      });
+    }
+    return chunks;
+  }
+
+  // Racimo de 4 esquirlas de hielo/cristal: mismo patrón de dispersión que el
+  // meteoro (tiene sentido que un campo de escombros incluya hielo), pero con
+  // siluetas filosas y sombreado "vidrioso" — inconfundible a simple vista.
+  function buildCrystalChunks(width){
+    const count = 4;
+    const chunks = [];
+    for (let i = 0; i < count; i++){
+      const t = (i + 0.5) / count;
+      const isCore = i === 0;
+      chunks.push({
+        angleOffset: (t - 0.5) * width * 0.85 + (Math.random()-0.5)*0.05,
+        radiusJitter: (Math.random() - 0.5) * 8,  // reducido de ±16 a ±8 para alinear con hitbox
+        size: isCore ? 12 + Math.random() * 5 : 5 + Math.random() * 5,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 2.0, // giran más rápido, como esquirlas livianas
+        shape: randomCrystalPoints(5 + Math.floor(Math.random() * 3)),
+        craters: [],
+        glassy: true,
+        isRing: false
+      });
+    }
+    return chunks;
+  }
+
+  // Un planeta NO es un racimo disperso: es un solo cuerpo sólido, grande y
+  // liso, más una luna chica pegada al costado. Estructuralmente distinto al
+  // meteoro/cristal desde el primer vistazo, no solo por el contorno.
+  function buildPlanetChunks(width){
+    const chunks = [];
+    chunks.push({
+      angleOffset: (Math.random() - 0.5) * 0.04,
+      radiusJitter: (Math.random() - 0.5) * 6,
+      size: 20 + Math.random() * 7,
+      rot: Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 0.5, // gira lento y "pesado"
+      shape: randomOrbPoints(22 + Math.floor(Math.random() * 6)),
+      craters: craterSpots(2 + Math.floor(Math.random() * 2), 0.14, 0.22),
+      glassy: false,
+      isRing: Math.random() < 0.45
+    });
+    if (Math.random() < 0.7){ // luna acompañante, casi siempre presente
+      const side = Math.random() < 0.5 ? -1 : 1;
+      chunks.push({
+        angleOffset: side * (width * 0.32 + Math.random() * 0.05),
+        radiusJitter: (Math.random() - 0.5) * 7,  // reducido proporcionalmente
+        size: 4 + Math.random() * 3,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.8,
+        shape: randomOrbPoints(12),
+        craters: [],
+        glassy: false,
+        isRing: false
+      });
+    }
+    return chunks;
+  }
+
+  function buildChunks(width, type){
+    if (type === 'crystal') return buildCrystalChunks(width);
+    if (type === 'planet') return buildPlanetChunks(width);
+    return buildMeteorChunks(width);
+  }
+
+  function tierForCombo(c){
+    let mult = 1;
+    for (const t of COMBO_TIERS) if (c >= t.need) mult = t.mult;
+    return mult;
+  }
+  function ringIdxForCombo(c){
+    let idx = null;
+    for (const t of COMBO_TIERS) if (c >= t.need) idx = t.ringIdx;
+    return idx;
+  }
+  function tierPaletteForCombo(c){
+    const ringIdx = ringIdxForCombo(c);
+    if (ringIdx === null) return null;
+    return { color: COLORS[ringIdx], glow: GLOW[ringIdx] + '0.55)' };
+  }
+
+  function updateComboUI(pulse){
+    if (comboMultiplier <= 1){
+      comboFrame.classList.remove('show', 'pulse');
+      return;
+    }
+    const palette = tierPaletteForCombo(combo) || { color: COLORS[0], glow: GLOW[0] + '0.55)' };
+    comboFrame.style.setProperty('--comboColor', palette.color);
+    comboFrame.style.setProperty('--comboGlow', palette.glow);
+    comboMultEl.textContent = 'x' + comboMultiplier;
+    comboFrame.classList.add('show');
+    if (pulse){
+      comboFrame.classList.remove('pulse');
+      void comboFrame.offsetWidth; // fuerza reflow para poder repetir la animación en cada subida
+      comboFrame.classList.add('pulse');
+    }
+  }
+
+  function advanceCombo(){
+    combo++;
+    comboMultiplier = tierForCombo(combo);
+    if (comboMultiplier > maxComboMultiplier) maxComboMultiplier = comboMultiplier;
+    comboWindowDuration = Math.max(COMBO_WINDOW_MIN, (minGap() / Math.max(angularSpeed, 0.0001)) * COMBO_WINDOW_BUFFER);
+    comboTimeLeft = comboWindowDuration;
+    updateComboUI(true);
+  }
+
+  function resetCombo(){
+    combo = 0;
+    comboMultiplier = 1;
+    comboTimeLeft = 0;
+    comboFrame.classList.remove('show', 'pulse');
+  }
+
+  // Un solo "despeje" ya sea de un obstáculo normal o de una doble amenaza
+  // completa: sube la racha, aplica el multiplicador vigente y reparte el
+  // texto flotante correspondiente.
+  function registerClear(isPrecision){
+    advanceCombo();
+    const base = isPrecision ? PRECISION_BASE_BONUS : 1;
+    const gained = base * comboMultiplier;
+    score += gained;
+    scoreEl.textContent = score;
+
+    const ppx = cx + Math.cos(player.angle) * player.currentRadius;
+    const ppy = cy + Math.sin(player.angle) * player.currentRadius - 18;
+    if (isPrecision){
+      precisionCount++;
+      spawnFloatingText(ppx, ppy, '¡PRECISO! +' + gained, '#ffe9b0');
+      playPrecisionSound();
+    } else {
+      spawnFloatingText(ppx, ppy, '+' + gained, COLORS[player.ring]);
+      playScoreSound(comboMultiplier);
+    }
+  }
+
+  // Despacha el puntaje de un obstáculo que acaba de despejarse. Si viene de
+  // una doble amenaza (groupId), espera a que se despejen todos sus
+  // fragmentos antes de puntuar, para dar UN solo bonus de precisión por
+  // pareja en vez de dos "+1" sueltos.
+  function handleObstacleCleared(o){
+    totalClears++; // dificultad: siempre +1, sin importar combo/precisión
+    if (o.groupId != null){
+      pendingGroups[o.groupId] = (pendingGroups[o.groupId] || 0) + 1;
+      if (pendingGroups[o.groupId] < o.groupSize) return;
+      delete pendingGroups[o.groupId];
+      registerClear(true);
+    } else {
+      registerClear(false);
+    }
+  }
+
+  function resetGame(){
+    player = { angle: -Math.PI/2, ring: 0, currentRadius: R[0], ringDir: 1 };
+    safeRing = player.ring; // desde acá se encadena qué anillo queda libre en cada obstáculo
+    obstacles = [];
+    angularSpeed = BASE_SPEED;
+    score = 0;
+    totalClears = 0;
+    pendingGroups = {};
+    maxComboMultiplier = 1;
+    precisionCount = 0;
+    resetCombo();
+    let a = player.angle + 1.4;
+    for (let i = 0; i < 4; i++){
+      const ring = Math.floor(Math.random() * RING_COUNT);
+      obstacles.push({ angle: a, ring, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()) });
+      a += minGap() + Math.random() * 0.4;
+    }
+    scoreEl.textContent = '0';
+  }
+
+  function minGap(multiplier){
+    return angularSpeed * (0.42 * (multiplier || 1)) + OBSTACLE_WIDTH + 0.2;
+  }
+
+  // Cambiar de anillo es cíclico y de a uno (el toque siempre avanza al
+  // "siguiente" anillo, nunca elige uno cualquiera) — así que el próximo
+  // anillo libre nunca puede pedir un salto de 2 anillos, solo quedarse
+  // quieto (0 toques) o avanzar uno (1 toque). SAFE_RING_MOVE_CHANCE ajusta
+  // qué tan seguido obliga a moverse en vez de dejar quedarse.
+  const SAFE_RING_MOVE_CHANCE = 0.65;
+  function pickNextSafeRing(){
+    return Math.random() < SAFE_RING_MOVE_CHANCE ? (safeRing + 1) % RING_COUNT : safeRing;
+  }
+
+  function spawnNext(afterAngle){
+    // a partir de cierto progreso, a veces bloquea 2 de los 3 anillos a la vez:
+    // hay que ubicarse en el único anillo libre, no solo "cambiar de cualquier forma"
+    // (usa totalClears, no score: la dificultad no debe acelerarse por el combo/precisión)
+    const doubleChance = totalClears > 3 ? Math.min(0.18 + totalClears * 0.012, 0.42) : 0;
+    const isDouble = Math.random() < doubleChance;
+
+    let gap = minGap(isDouble ? 1.5 : 1) + Math.random() * 0.35;
+    if (totalClears > 0 && totalClears % 8 === 0) gap *= 1.5; // respiro cada 8 despejes
+    const angle = afterAngle + gap;
+
+    // El anillo libre de ESTE obstáculo siempre está a lo sumo a 1 toque del
+    // anillo libre del anterior. Antes cada doble amenaza sorteaba su anillo
+    // libre sin memoria de la anterior, así que dos dobles seguidas podían
+    // pedir un salto de 2 anillos en una ventana imposible de cumplir —
+    // literalmente tapando todas las salidas. Encadenar el anillo seguro
+    // garantiza que siempre hay un camino alcanzable, sin importar cuántas
+    // amenazas dobles caigan seguidas ni qué tan rápido vaya el juego.
+    const nextSafe = pickNextSafeRing();
+
+    if (isDouble){
+      const groupId = ++groupIdSeq;
+      for (let r = 0; r < RING_COUNT; r++){
+        if (r === nextSafe) continue; // el único anillo libre de esta doble amenaza
+        obstacles.push({ angle, ring: r, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()), warn: true, groupId, groupSize: RING_COUNT - 1 });
+      }
+    } else {
+      // obstáculo simple: bloquea cualquier anillo menos el seguro, así el
+      // camino sigue garantizado aunque el jugador todavía no haya llegado a él
+      const blocked = [0, 1, 2].filter(r => r !== nextSafe);
+      const ring = blocked[Math.floor(Math.random() * blocked.length)];
+      obstacles.push({ angle, ring, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()) });
+    }
+
+    safeRing = nextSafe;
+  }
+
+  function startGame(){
+    resetGame();
+    state = 'playing';
+    paused = false;
+    startScreen.style.display = 'none';
+    gameOverScreen.style.display = 'none';
+    pauseScreen.style.display = 'none';
+    pauseBtn.style.display = 'flex';
+    scoreFrameEl.classList.add('show');
+    stopMenuMusic();
+    startGameMusic();
+    notifyGameplayStart();
+  }
+
+  function gameOver(px, py){
+    state = 'gameover';
+    lastCollisionAt = performance.now();
+    const isRecord = score > 0 && score > bestScore;
+    const gapToBest = bestScore - score;
+    if (score > bestScore){ bestScore = score; try { localStorage.setItem('orbis_best', bestScore); } catch(e){} }
+
+    animateScoreCounter(finalScoreEl, score, 650);
+    bestScoreValEl.textContent = bestScore;
+    if (bestScore > 0) menuBestValEl.textContent = bestScore;
+    maxComboValEl.textContent = 'x' + maxComboMultiplier;
+    resultCard.classList.toggle('record', isRecord);
+
+    precisionChip.classList.toggle('hidden', precisionCount === 0);
+    if (precisionCount > 0) precisionValEl.textContent = precisionCount;
+
+    deltaHintEl.textContent = (!isRecord && bestScore > 0 && gapToBest > 0)
+      ? ('A ' + gapToBest + ' de tu mejor')
+      : '';
+
+    gameOverScreen.style.display = 'flex';
+    pauseBtn.style.display = 'none';
+    scoreFrameEl.classList.remove('show');
+    comboFrame.classList.remove('show', 'pulse');
+    spawnBurst(px ?? cx, py ?? cy, COLORS[player.ring]);
+    triggerShake(11);
+    triggerHitFlash();
+    playDestructionSound();
+    stopGameMusic();
+    try { if (navigator.vibrate) navigator.vibrate(isRecord ? [40, 40, 70] : 60); } catch(e){}
+    notifyGameplayStop();
+  }
+
+  function goToMenu(){
+    state = 'ready';
+    paused = false;
+    menuEnteredAt = performance.now();
+    gameOverScreen.style.display = 'none';
+    pauseScreen.style.display = 'none';
+    pauseBtn.style.display = 'none';
+    startScreen.style.display = 'flex';
+    stopGameMusic();
+    startMenuMusic();
+  }
+
+  // Cuenta el puntaje final subiendo desde 0 en vez de aparecer de golpe —
+  // el "tick" ascendente es lo que le da peso al número en el momento en que
+  // el jugador más lo está mirando.
+  function animateScoreCounter(el, target, duration){
+    if (target <= 0){ el.textContent = '0'; return; }
+    const start = performance.now();
+    function step(now){
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cúbico: rápido al inicio, se asienta al final
+      el.textContent = Math.round(target * eased);
+      if (t < 1) requestAnimationFrame(step);
+      else el.textContent = target;
+    }
+    requestAnimationFrame(step);
+  }
+
+  function triggerHitFlash(){
+    // Quitar la clase y forzar reflow antes de re-agregarla permite que la
+    // animación se repita en cada choque, no solo la primera vez.
+    hitFlash.classList.remove('hit');
+    void hitFlash.offsetWidth;
+    hitFlash.classList.add('hit');
+  }
+
+  function togglePause(){
+    if (state !== 'playing') return;
+    paused = !paused;
+    pauseScreen.style.display = paused ? 'flex' : 'none';
+    setPauseIcon(paused);
+    if (audioCtx && gameMasterGain){
+      gameMasterGain.gain.setTargetAtTime(
+        paused ? 0 : (soundOn ? 0.36 : 0),
+        audioCtx.currentTime, 0.2
+      );
+    }
+    if (paused) notifyGameplayStop(); else notifyGameplayStart();
+  }
+
+  // ---------- Ganchos para integrar con portales (Poki, CrazyGames, etc.) ----------
+  // Cada portal usa su propio SDK y sus propios nombres de función. Estas son
+  // solo las marcas de los momentos exactos donde hay que llamar al SDK real
+  // antes de publicar (ej. PokiSDK.gameplayStart() / CrazyGames.SDK.game.gameplayStart()).
+  function notifyGameLoaded(){ /* SDK portal: avisar que el juego ya cargó */ }
+  // Mostrar récord guardado en el menú desde el primer frame
+  if (bestScore > 0) menuBestValEl.textContent = bestScore;
+  function notifyGameplayStart(){ /* SDK: PokiSDK.gameplayStart() / CrazyGames.SDK.game.gameplayStart() */ }
+  function notifyGameplayStop(){ /* SDK: PokiSDK.gameplayStop() / CrazyGames.SDK.game.gameplayStop() */ }
+
+  // ---------- Input — cada zona responde solo a lo suyo ----------
+  // Durante el juego: solo el canvas cambia de anillo.
+  canvas.addEventListener('pointerdown', (e) => {
+    if (state !== 'playing' || paused) return;
+    ensureAudio();
+    jumpRing();
+    playSwitchSound(player.ring);
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch(e){}
+  });
+
+  // Teclado: Espacio/flechas cambian de anillo solo durante el juego.
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown'){
+      e.preventDefault();
+      ensureAudio();
+      if (state === 'playing' && !paused){
+        jumpRing();
+        playSwitchSound(player.ring);
+        try { if (navigator.vibrate) navigator.vibrate(8); } catch(e){}
+      }
+    }
+  });
+
+  // Menú principal: solo el botón JUGAR arranca la partida.
+  document.querySelector('#startScreen .cta').addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    ensureAudio();
+    fadeTransition(() => startGame());
+  });
+
+  // Game over: solo el botón REINTENTAR reinicia, solo VOLVER AL MENÚ vuelve.
+  document.querySelector('#gameOverScreen .cta').addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    ensureAudio();
+    if (performance.now() - lastCollisionAt > 350) fadeTransition(() => startGame());
+  });
+  menuBtn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    fadeTransition(() => goToMenu());
+  });
+
+  // Pausa
+  soundBtn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    soundOn = !soundOn;
+    setSoundIcon(soundOn);
+    if (audioCtx){
+      const vol = soundOn ? 1 : 0;
+      const t = audioCtx.currentTime;
+      if (menuMasterGain) menuMasterGain.gain.setTargetAtTime(soundOn ? 0.32 : 0, t, 0.2);
+      if (gameMasterGain) gameMasterGain.gain.setTargetAtTime(soundOn ? 0.36 : 0, t, 0.2);
+    }
+  });
+  pauseBtn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    ensureAudio();
+    togglePause();
+  });
+  document.querySelector('#pauseScreen .cta').addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    togglePause();
+  });
+
+  // ---------- Bucle principal ----------
+  let last = performance.now();
+  let loadScreenDone = false;
+  const loadScreenEl = document.getElementById('loadScreen');
+  function frame(now){
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+
+    // Quitar la pantalla de carga en el primer frame real
+    if (!loadScreenDone){ loadScreenDone = true; loadScreenEl.classList.add('done'); }
+
+    // fondo con estela (glow trail)
+    ctx.fillStyle = 'rgba(5,6,15,0.32)';
+    ctx.fillRect(0, 0, W, H);
+
+    starRotation += dt * 0.05;
+    elapsedMs += dt * 1000;
+    maybeSpawnShootingStar();
+    updateShootingStars(dt);
+
+    ctx.save();
+    if (shakeMag > 0.05){
+      ctx.translate((Math.random()-0.5) * shakeMag, (Math.random()-0.5) * shakeMag);
+    }
+
+    drawNebula();
+    drawStars();
+    drawShootingStars();
+
+    if (state === 'ready'){
+      drawMenuDecoration(now, dt);
+    } else {
+      drawRings();
+
+      if (state === 'playing' && !paused){
+        angularSpeed = Math.min(BASE_SPEED + totalClears * SPEED_PER_POINT, MAX_SPEED);
+        player.angle += angularSpeed * dt;
+
+        // El salto entre anillos no es instantáneo: currentRadius tarda unos
+        // cuadros en llegar al anillo destino (abajo). Antes la colisión solo
+        // comparaba o.ring === player.ring, que YA es el anillo de destino
+        // apenas tocás — así que un salto que atraviesa de paso el radio de
+        // OTRO anillo (ej. anillo 2 → anillo 0, que cruza el radio del
+        // anillo 1 en el camino) nunca se chequeaba contra los obstáculos de
+        // ese anillo intermedio: la nave los atravesaba de fantasma.
+        // Fix: en vez de comparar índices de anillo, se guarda el radio antes
+        // de moverse y se chequea si el radio del obstáculo quedó DENTRO del
+        // tramo que la nave barrió este cuadro (prevRadius → currentRadius).
+        // Así cualquier anillo cruzado en el camino queda cubierto, sin
+        // importar cuántos anillos salte ni el framerate del dispositivo.
+        const prevRadius = player.currentRadius;
+        const targetR = R[player.ring];
+        player.currentRadius += (targetR - player.currentRadius) * Math.min(1, dt * 12);
+
+        // Dimensiones reales de la nave (del drawPlayer):
+        //   largo total: ~22px (punta a escudo trasero)
+        //   ancho total: ~17px (de punta a punta de alas)
+        // En el eje radial el lado que importa es el ancho (±8.5px).
+        // En el eje angular convertimos el "medio largo" de la nave a radianes
+        // según el radio actual para que el hitbox escale con la órbita.
+        const SHIP_HALF_W = 12;  // px — ancho real de alas (9) + jitter máximo reducido (8/2=4) ≈ 13, redondeado a 12
+        const SHIP_HALF_L = 11;  // px — mitad del largo, para margen angular
+
+        // Margen radial: nave real + colchón lerp asintótico
+        const sweepLo = Math.min(prevRadius, player.currentRadius) - SHIP_HALF_W;
+        const sweepHi = Math.max(prevRadius, player.currentRadius) + SHIP_HALF_W;
+
+        for (let i = obstacles.length - 1; i >= 0; i--){
+          const o = obstacles[i];
+          for (const c of o.chunks) c.rot += c.rotSpeed * dt;
+          const diff = o.angle - player.angle;
+          const ringRadius = R[o.ring];
+          // Margen angular de la nave en radianes según su radio actual
+          const angularHit = o.width / 2 + SHIP_HALF_L / Math.max(player.currentRadius, 1);
+          if (Math.abs(diff) < angularHit && ringRadius >= sweepLo && ringRadius <= sweepHi){
+            const px = cx + Math.cos(player.angle) * player.currentRadius;
+            const py = cy + Math.sin(player.angle) * player.currentRadius;
+            gameOver(px, py);
+          }
+          if (diff < -o.width/2 - 0.05){
+            obstacles.splice(i, 1);
+            handleObstacleCleared(o);
+            spawnNext(obstacles.length ? obstacles[obstacles.length-1].angle : player.angle + 1.2);
+          }
+        }
+
+        // la racha se agota sola si no se despeja otro obstáculo a tiempo
+        if (combo > 0){
+          comboTimeLeft -= dt;
+          if (comboTimeLeft <= 0){
+            resetCombo();
+          } else {
+            comboBarFill.style.transform = 'scaleX(' + Math.max(0, comboTimeLeft / comboWindowDuration) + ')';
+          }
+        }
+      }
+
+      drawObstacles();
+      if (state === 'playing'){
+        drawPlayer(now);
+      }
+      drawCore(now, undefined, undefined, comboMultiplier > 1 ? ringIdxForCombo(combo) : null);
+    }
+
+    updateParticles(dt);
+    updateFloatingTexts(dt);
+    shakeMag *= Math.max(0, 1 - dt * 8);
+    drawParticles();
+    drawFloatingTexts();
+    ctx.restore();
+
+    requestAnimationFrame(frame);
+  }
+
+  function drawMiniShip(x, y, heading, hullColor){
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(heading);
+
+    // llama mini
+    const fl = 0.7 + Math.random() * 0.3;
+    const fg = ctx.createLinearGradient(-4, 0, -4 - 7*fl, 0);
+    fg.addColorStop(0, hullColor); fg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = fg;
+    ctx.beginPath();
+    ctx.moveTo(-4, 2); ctx.lineTo(-4 - 7*fl, 0); ctx.lineTo(-4, -2);
+    ctx.closePath(); ctx.fill();
+
+    // casco mini
+    ctx.shadowColor = hullColor; ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(3, 2.5); ctx.lineTo(-1.5, 5.5);
+    ctx.lineTo(-3.5, 3.5); ctx.lineTo(-4, 1.2);
+    ctx.lineTo(-4, -1.2); ctx.lineTo(-3.5, -3.5);
+    ctx.lineTo(-1.5, -5.5); ctx.lineTo(3, -2.5);
+    ctx.closePath();
+    const hg = ctx.createLinearGradient(10, 0, -4, 0);
+    hg.addColorStop(0, '#ffffff'); hg.addColorStop(1, '#8ab4cc');
+    ctx.fillStyle = hg; ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // quilla mini
+    ctx.strokeStyle = `rgba(255,255,255,0.3)`; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-2, 0); ctx.stroke();
+
+    // cabina mini
+    ctx.beginPath();
+    ctx.ellipse(4.5, 0, 2.2, 1.3, 0, 0, Math.PI * 2);
+    ctx.fillStyle = hullColor; ctx.globalAlpha = 0.9; ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  function drawMenuDecoration(now, dt){
+    const my = H * 0.30; // logo del menú arriba, lejos del texto/botón
+    const ringRadius = Math.min(W, H) * 0.13;
+
+    // entrada con fundido + crecimiento, para que no aparezca de golpe
+    const introT = Math.min((now - menuEnteredAt) / 650, 1);
+    const eased = 1 - Math.pow(1 - introT, 3);
+    const scale = 0.7 + 0.3 * eased;
+
+    ctx.save();
+    ctx.globalAlpha = eased;
+    ctx.translate(cx, my);
+    ctx.scale(scale, scale);
+    ctx.translate(-cx, -my);
+
+    ctx.beginPath();
+    ctx.arc(cx, my, ringRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(139,92,246,0.16)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    menuDotAngle += dt * 0.6;
+    const dx = cx + Math.cos(menuDotAngle) * ringRadius;
+    const dy = my + Math.sin(menuDotAngle) * ringRadius;
+    // La nave del logo cambia de color según el tercio del anillo que
+    // recorre (cian → violeta → ámbar) — el mismo ciclo de colores que la
+    // nave real usa al cambiar de anillo con cada toque. Antes de jugar,
+    // el menú ya insinúa la mecánica.
+    const norm = ((menuDotAngle % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
+    const shipColorIdx = Math.floor(norm / (Math.PI*2/3)) % 3;
+    drawMiniShip(dx, dy, menuDotAngle + Math.PI/2, COLORS[shipColorIdx]);
+
+    drawCore(now, cx, my);
+    ctx.restore();
+  }
+
+  function drawStars(){
+    const base = Math.min(W, H);
+    const t = performance.now() / 1000;
+    ctx.save();
+    for (const s of stars){
+      const ang = s.a + starRotation * s.depth; // más "cerca" = gira un poco más rápido (paralaje)
+      const rad = s.r * base * 0.72;
+      const x = cx + Math.cos(ang) * rad;
+      const y = cy + Math.sin(ang) * rad;
+
+      const tw = 0.35 + 0.65 * Math.sin(t * s.twSpeed + s.tw);
+      const layerMult = s.layer === 2 ? 1.90 : s.layer === 1 ? 1.45 : 1.0;
+      const al = Math.min(1, s.baseA * tw * layerMult);
+      if (al < 0.04) continue;
+
+      ctx.beginPath();
+      ctx.arc(x, y, s.size, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${s.tint},${al.toFixed(3)})`;
+      ctx.fill();
+
+      // destello en cruz solo en estrellas grandes, y solo en el pico de su titileo
+      if (s.size > 0.85 && tw > 0.52){
+        const fl = s.size * (s.layer === 2 ? 6.5 : 4.5) * tw;
+        ctx.strokeStyle = `rgba(${s.tint},${(al*0.60).toFixed(3)})`;
+        ctx.lineWidth = s.layer === 2 ? 0.9 : 0.6;
+        ctx.beginPath();
+        ctx.moveTo(x-fl, y); ctx.lineTo(x+fl, y);
+        ctx.moveTo(x, y-fl*0.65); ctx.lineTo(x, y+fl*0.65);
+        ctx.stroke();
+        // diagonales sutiles, solo en las estrellas más brillantes de la capa top
+        if (s.layer === 2 && tw > 0.72){
+          const fd = fl * 0.40;
+          ctx.strokeStyle = `rgba(${s.tint},${(al*0.25).toFixed(3)})`;
+          ctx.lineWidth = 0.40;
+          ctx.beginPath();
+          ctx.moveTo(x-fd, y-fd); ctx.lineTo(x+fd, y+fd);
+          ctx.moveTo(x+fd, y-fd); ctx.lineTo(x-fd, y+fd);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawRings(){
+    ctx.save();
+    for (let i = 0; i < RING_COUNT; i++){
+      const active = i === player.ring;
+
+      // línea base
+      ctx.beginPath();
+      ctx.arc(cx, cy, R[i], 0, Math.PI*2);
+      ctx.strokeStyle = GLOW[i] + (active ? '0.4)' : '0.16)');
+      ctx.lineWidth = active ? 2.6 : 2;
+      ctx.stroke();
+
+      // marcas tipo instrumento de nave, repartidas alrededor del anillo
+      const ticks = 16;
+      ctx.strokeStyle = GLOW[i] + (active ? '0.7)' : '0.35)');
+      ctx.lineWidth = active ? 2.4 : 2;
+      for (let t = 0; t < ticks; t++){
+        const a = (t / ticks) * Math.PI * 2;
+        const x1 = cx + Math.cos(a) * (R[i] - 4);
+        const y1 = cy + Math.sin(a) * (R[i] - 4);
+        const x2 = cx + Math.cos(a) * (R[i] + 4);
+        const y2 = cy + Math.sin(a) * (R[i] + 4);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawObstacles(){
+    ctx.save();
+    const nowMs = performance.now();
+    for (const o of obstacles){
+      const midX = cx + Math.cos(o.angle) * R[o.ring];
+      const midY = cy + Math.sin(o.angle) * R[o.ring];
+      const glowR = 34 + o.width * R[o.ring] * 0.5;
+
+      // aureola de advertencia para los patrones de doble amenaza: se nota antes de llegar
+      if (o.warn){
+        const pulse = 0.5 + 0.5 * Math.sin(nowMs / 140);
+        const warnR = glowR * 1.6;
+        const warnGrad = ctx.createRadialGradient(midX, midY, 0, midX, midY, warnR);
+        warnGrad.addColorStop(0, `rgba(255,70,70,${0.24 * pulse})`);
+        warnGrad.addColorStop(1, 'rgba(255,70,70,0)');
+        ctx.fillStyle = warnGrad;
+        ctx.beginPath();
+        ctx.arc(midX, midY, warnR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // halo ambiental detrás del grupo de fragmentos (uno solo por obstáculo, barato)
+      const grad = ctx.createRadialGradient(midX, midY, 0, midX, midY, glowR);
+      grad.addColorStop(0, GLOW[o.ring] + '0.30)');
+      grad.addColorStop(1, GLOW[o.ring] + '0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(midX, midY, glowR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // fragmentos de debris individuales, cada uno rotando
+      for (const c of o.chunks){
+        const angle = o.angle + c.angleOffset;
+        const radius = R[o.ring] + c.radiusJitter;
+        const px = cx + Math.cos(angle) * radius;
+        const py = cy + Math.sin(angle) * radius;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(c.rot);
+
+        ctx.beginPath();
+        c.shape.forEach((pt, idx) => {
+          const rx = Math.cos(pt.a) * pt.r * c.size;
+          const ry = Math.sin(pt.a) * pt.r * c.size;
+          if (idx === 0) ctx.moveTo(rx, ry); else ctx.lineTo(rx, ry);
+        });
+        ctx.closePath();
+
+        if (c.glassy){
+          // sombreado de cristal/hielo: más blanco, más brillo, borde fino y claro
+          // en vez del degradé rocoso — así un vistazo alcanza para distinguirlo
+          const iceGrad = ctx.createLinearGradient(-c.size, -c.size, c.size, c.size);
+          iceGrad.addColorStop(0, '#ffffff');
+          iceGrad.addColorStop(0.35, shade(COLORS[o.ring], 0.25));
+          iceGrad.addColorStop(1, shade(COLORS[o.ring], -0.15));
+          ctx.globalAlpha = 0.9; // levemente translúcido
+          ctx.fillStyle = iceGrad;
+          ctx.fill();
+          ctx.globalAlpha = 0.65;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        } else {
+          // sombreado tipo roca/planeta: gradiente de cara iluminada a cara en sombra
+          const lightGrad = ctx.createLinearGradient(-c.size, -c.size, c.size, c.size);
+          lightGrad.addColorStop(0, shade(COLORS[o.ring], 0.35));
+          lightGrad.addColorStop(0.55, COLORS[o.ring]);
+          lightGrad.addColorStop(1, shade(COLORS[o.ring], -0.45));
+          ctx.fillStyle = lightGrad;
+          ctx.fill();
+
+          ctx.globalAlpha = 0.5;
+          ctx.strokeStyle = shade(COLORS[o.ring], -0.6);
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+
+        // manchas de superficie (cráteres de roca o continentes/océanos de planeta)
+        for (const cr of c.craters){
+          const crx = Math.cos(cr.angle) * c.size * cr.dist;
+          const cry = Math.sin(cr.angle) * c.size * cr.dist;
+          ctx.beginPath();
+          ctx.arc(crx, cry, c.size * cr.r, 0, Math.PI * 2);
+          ctx.fillStyle = shade(COLORS[o.ring], -0.5);
+          ctx.globalAlpha = 0.55;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+
+        // anillo tipo Saturno para el cuerpo "planeta" que lo sorteó
+        if (c.isRing){
+          ctx.globalAlpha = 0.55;
+          ctx.strokeStyle = shade(COLORS[o.ring], 0.3);
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, c.size * 1.55, c.size * 0.55, 0.4, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawPlayer(now){
+    const x = cx + Math.cos(player.angle) * player.currentRadius;
+    const y = cy + Math.sin(player.angle) * player.currentRadius;
+    const heading = player.angle + Math.PI/2;
+    const accent = COLORS[player.ring]; // color del anillo activo — solo para acentos
+    const t = now / 1000;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(heading);
+
+    // ── Propulsor doble — color del anillo activo ───────────────────────
+    const f1 = 0.55 + Math.sin(t * 23.7) * 0.25 + Math.random() * 0.2;
+    const f2 = 0.55 + Math.sin(t * 19.1 + 1.2) * 0.25 + Math.random() * 0.2;
+    [[-5.5, f1], [-5.5, f2]].forEach(([base, flicker], idx) => {
+      const wy = idx === 0 ? 3.5 : -3.5;
+      const flamGrad = ctx.createLinearGradient(base, 0, base - 13*flicker, 0);
+      flamGrad.addColorStop(0, accent);
+      flamGrad.addColorStop(0.5, accent.replace(')', ',0.5)').replace('rgb', 'rgba'));
+      flamGrad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.beginPath();
+      ctx.moveTo(base, wy + 1.8);
+      ctx.lineTo(base - 13*flicker, wy);
+      ctx.lineTo(base, wy - 1.8);
+      ctx.closePath();
+      ctx.fillStyle = flamGrad;
+      ctx.fill();
+    });
+
+    // ── Escudo trasero — acento de color ────────────────────────────────
+    ctx.beginPath();
+    ctx.moveTo(-6, -9); ctx.lineTo(-6, 9);
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2.2;
+    ctx.globalAlpha = 0.45;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // ── Cuerpo principal — siempre blanco frío, independiente del anillo ─
+    // El halo exterior usa el color del anillo para que la lectura de
+    // "en qué anillo estoy" siga siendo inmediata sin teñir el casco.
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.moveTo(16, 0);
+    ctx.lineTo(6, 3.5);
+    ctx.lineTo(-2, 8.5);
+    ctx.lineTo(-5, 5);
+    ctx.lineTo(-6, 2);
+    ctx.lineTo(-6, -2);
+    ctx.lineTo(-5, -5);
+    ctx.lineTo(-2, -8.5);
+    ctx.lineTo(6, -3.5);
+    ctx.closePath();
+    const hullGrad = ctx.createLinearGradient(16, 0, -6, 0);
+    hullGrad.addColorStop(0, '#ffffff');
+    hullGrad.addColorStop(0.45, '#d4eef8');
+    hullGrad.addColorStop(1, '#7a9db8'); // cola siempre azul acero fría
+    ctx.fillStyle = hullGrad;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // ── Líneas de panel — blanco puro muy sutil, sin color de anillo ─────
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(14, 0); ctx.lineTo(-4, 0);   // quilla central
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(8, 2); ctx.lineTo(-1, 7); ctx.lineTo(-4, 4);  // panel ala der
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(8, -2); ctx.lineTo(-1, -7); ctx.lineTo(-4, -4); // panel ala izq
+    ctx.stroke();
+
+    // ── Cabina — color del anillo activo (acento principal de identidad) ─
+    ctx.beginPath();
+    ctx.ellipse(7, 0, 3.8, 2.2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = accent;
+    ctx.globalAlpha = 0.9;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // reflejo interno fijo, siempre blanco
+    ctx.beginPath();
+    ctx.ellipse(8.2, -0.6, 1.4, 0.7, -0.4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ---------- Núcleo (reactor central) ----------
+  // Antes era solo un halo difuso + un punto plano. Ahora es una pequeña
+  // esfera con sombreado real, dos aros de contención girando en sentidos
+  // opuestos, y un halo que respira. Si hay una racha activa, todo el
+  // conjunto adopta el color de ese tier (cian→violeta→ámbar) — el reactor
+  // se siente parte del mismo sistema de recompensa que el combo, como si
+  // absorbiera la energía de la racha.
+  function drawCore(now, px, py, ringIdx){
+    px = px ?? cx; py = py ?? cy;
+    const glow = ringIdx == null ? 'rgba(6,182,212,' : GLOW[ringIdx];
+    const accent = ringIdx == null ? '#06b6d4' : COLORS[ringIdx];
+    const pulse = 5 + Math.sin(now/400) * 2.5;
+    const coreR = 8;
+
+    ctx.save();
+
+    // halo exterior, respira con el pulso
+    const haloR = 27 + pulse;
+    const halo = ctx.createRadialGradient(px, py, 0, px, py, haloR);
+    halo.addColorStop(0, 'rgba(255,255,255,0.85)');
+    halo.addColorStop(0.4, glow + '0.38)');
+    halo.addColorStop(1, glow + '0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(px, py, haloR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // dos aros de contención rotando en sentidos opuestos
+    ctx.strokeStyle = glow + '0.55)';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.ellipse(px, py, coreR + 7, coreR + 3.2, now/900, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(px, py, coreR + 7, coreR + 3.2, -now/700 + Math.PI/2, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // cuerpo del reactor: esfera con sombreado, no un punto plano
+    const body = ctx.createRadialGradient(px - coreR*0.35, py - coreR*0.35, 0, px, py, coreR);
+    body.addColorStop(0, '#ffffff');
+    body.addColorStop(0.55, accent);
+    body.addColorStop(1, shade(accent, -0.5));
+    ctx.beginPath();
+    ctx.arc(px, py, coreR, 0, Math.PI * 2);
+    ctx.fillStyle = body;
+    ctx.fill();
+
+    // punto interno brillante, pulsando
+    ctx.beginPath();
+    ctx.arc(px, py, 2.6 + Math.sin(now/220) * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  notifyGameLoaded();
+
+  // Pausa automática al cambiar de pestaña — el jugador no pierde sin querer
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && state === 'playing' && !paused) togglePause();
+  });
+  requestAnimationFrame(frame);
+})();
+</script>
+<!--
+  NOTA SOBRE EL PUNTAJE "MEJOR":
+  Ahora mismo vive solo en una variable de JavaScript (bestScore), así que
+  se resetea al recargar la página. Es así a propósito: el entorno de
+  Artifacts de Claude no permite usar localStorage/sessionStorage.
+  Cuando subas este archivo a tu propio hosting (GitHub Pages, un portal, etc.)
+  podés hacerlo persistente reemplazando estas dos partes:
+
+    let bestScore = parseInt(localStorage.getItem('orbita_best') || '0', 10);
+
+  y dentro de gameOver(), donde dice "if (score > bestScore) bestScore = score;":
+
+    if (score > bestScore) { bestScore = score; localStorage.setItem('orbita_best', bestScore); }
+-->
+</body>
+</html>
