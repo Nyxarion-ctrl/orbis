@@ -585,9 +585,9 @@
 
   let stars = [];
   const STAR_LAYERS = [
-    { n: 42, rMin: 0.15, rMax: 0.7,  aMin: 0.08, aMax: 0.35, spMin: 0.3, spMax: 1.2 },
-    { n: 20, rMin: 0.5,  rMax: 1.2,  aMin: 0.25, aMax: 0.6,  spMin: 0.6, spMax: 2.0 },
-    { n: 9,  rMin: 1.0,  rMax: 2.0,  aMin: 0.5,  aMax: 1.0,  spMin: 1.0, spMax: 3.0 }
+    { n: 130, rMin: 0.12, rMax: 0.65, aMin: 0.06, aMax: 0.32, spMin: 0.3, spMax: 1.2 },
+    { n: 55,  rMin: 0.45, rMax: 1.15, aMin: 0.22, aMax: 0.58, spMin: 0.6, spMax: 2.0 },
+    { n: 22,  rMin: 0.9,  rMax: 1.9,  aMin: 0.45, aMax: 1.0,  spMin: 1.0, spMax: 3.0 }
   ];
   STAR_LAYERS.forEach((lc, layer) => {
     const count = Math.max(4, Math.round(lc.n * STAR_COUNT_SCALE));
@@ -614,24 +614,40 @@
   ];
 
   let shootingStars = [];
-  let nextShootingStarAt = 2500 + Math.random() * 3000;
+  // Frecuencia de fugaces escalada por dispositivo:
+  // phone: cada 10-18s (menos carga de canvas) | tablet: cada 7-13s | desktop: cada 4-10s
+  const SHOOTING_STAR_MIN = DEVICE_TIER === 'phone' ? 10000 : DEVICE_TIER === 'tablet' ? 7000 : 4000;
+  const SHOOTING_STAR_MAX = DEVICE_TIER === 'phone' ? 8000  : DEVICE_TIER === 'tablet' ? 6000 : 6000;
+  let nextShootingStarAt = SHOOTING_STAR_MIN + Math.random() * SHOOTING_STAR_MAX;
   let elapsedMs = 0;
 
   function maybeSpawnShootingStar(){
     if (elapsedMs >= nextShootingStarAt){
       spawnShootingStar();
-      nextShootingStarAt = elapsedMs + 4000 + Math.random() * 6000;
+      nextShootingStarAt = elapsedMs + SHOOTING_STAR_MIN + Math.random() * SHOOTING_STAR_MAX;
     }
   }
   function spawnShootingStar(){
-    const fromLeft = Math.random() < 0.5;
-    const startX = fromLeft ? -30 : W + 30;
-    const startY = Math.random() * H * 0.45;
-    const dirX = fromLeft ? 1 : -1;
-    const speed = (3.5 + Math.random() * 4) * 60; // versión "premium" de Debris Surge, más rápida y con más cola
+    // Origen: uno de cuatro bordes al azar — izquierda, derecha, arriba, esquina superior
+    const edge = Math.floor(Math.random() * 4);
+    let startX, startY, vx, vy;
+    const speed = (3.5 + Math.random() * 4) * 60;
+    const angle = (Math.random() * 0.55 + 0.18); // pendiente entre 0.18 y 0.73 rad
+    if (edge === 0){        // desde la izquierda → diagonal derecha-abajo
+      startX = -30; startY = Math.random() * H * 0.6;
+      vx =  speed; vy = Math.tan(angle) * speed;
+    } else if (edge === 1){ // desde la derecha → diagonal izquierda-abajo
+      startX = W + 30; startY = Math.random() * H * 0.6;
+      vx = -speed; vy = Math.tan(angle) * speed;
+    } else if (edge === 2){ // desde arriba → diagonal abajo-derecha
+      startX = Math.random() * W * 0.6; startY = -30;
+      vx =  speed * 0.7; vy = speed;
+    } else {                // desde arriba-derecha → diagonal abajo-izquierda
+      startX = W * 0.4 + Math.random() * W * 0.6; startY = -30;
+      vx = -speed * 0.7; vy = speed;
+    }
     shootingStars.push({
-      x: startX, y: startY,
-      vx: dirX * speed, vy: (1.2 + Math.random() * 2.5) * 60,
+      x: startX, y: startY, vx, vy,
       life: 1.0,
       len: 70 + Math.random() * 90,
       decayPerSec: (0.016 + Math.random() * 0.010) * 60
@@ -741,10 +757,30 @@
     return c;
   }
 
+  // Buffers de percusión pre-calculados una sola vez — jamás dentro de un loop
+  let _kickBuf = null, _hatBuf = null;
+  function ensurePercBuffers(){
+    if (_kickBuf) return;
+    const sr = audioCtx.sampleRate;
+    // bombo
+    _kickBuf = audioCtx.createBuffer(1, sr * 0.18, sr);
+    const kd = _kickBuf.getChannelData(0);
+    for (let i = 0; i < kd.length; i++)
+      kd[i] = (Math.random()*2-1) * Math.exp(-i / (sr * 0.04));
+    // hi-hat
+    _hatBuf = audioCtx.createBuffer(1, sr * 0.06, sr);
+    const hd = _hatBuf.getChannelData(0);
+    for (let i = 0; i < hd.length; i++)
+      hd[i] = (Math.random()*2-1) * Math.exp(-i / (sr * 0.012));
+  }
+
+  // Reverb solo en desktop/tablet — en celular es el nodo más pesado
+  const USE_REVERB = DEVICE_TIER !== 'phone';
+  // Arpejo limitado en celular (menos notas simultáneas)
+  const ARP_DENSITY = DEVICE_TIER === 'phone' ? 0.5 : 1.0;
+
   // ══════════════════════════════════════════════════════════════════════
   // MOTOR 1 — MENÚ: ambiental espacial, atmosférico y etéreo
-  // Basado en drones desintonizados + pad espacioso + gotas de melodía
-  // muy espaciadas. Sin ritmo marcado — el menú no presiona al jugador.
   // ══════════════════════════════════════════════════════════════════════
   function startMenuMusic(){
     if (!audioCtx || !soundOn) return;
@@ -757,45 +793,52 @@
 
     const comp = makeComp(-18, 3);
     comp.connect(menuMasterGain);
-    const reverb = makeReverb(3.5, 2.0);
-    const rvGain = audioCtx.createGain(); rvGain.gain.value = 0.55;
-    reverb.connect(rvGain); rvGain.connect(comp);
 
-    // ── Drones de fondo: dos osciladores ligeramente desafinados ─────────
-    // Efecto de "latido cósmico" (beating) que da sensación de espacio
+    let reverbDest = comp; // por defecto sin reverb
+    if (USE_REVERB){
+      const reverb = makeReverb(2.5, 2.0); // más corto que antes para reducir costo
+      const rvGain = audioCtx.createGain(); rvGain.gain.value = 0.45;
+      reverb.connect(rvGain); rvGain.connect(comp);
+      reverbDest = reverb;
+    }
+
+    // Drones: solo 2 osciladores, LFO muy lento — costo mínimo
     [54.8, 55.3].forEach((freq, i) => {
       const osc = audioCtx.createOscillator();
       osc.type = 'sine'; osc.frequency.value = freq;
-      const g = audioCtx.createGain(); g.gain.value = 0.18 - i * 0.04;
-      osc.connect(g); g.connect(comp); g.connect(reverb);
+      const g = audioCtx.createGain(); g.gain.value = 0.15 - i * 0.03;
+      osc.connect(g); g.connect(comp);
+      if (USE_REVERB) g.connect(reverbDest);
       osc.start();
-      // vibrato muy lento (LFO a 0.15Hz — una oscilación cada ~7s)
-      const lfo = audioCtx.createOscillator(); lfo.frequency.value = 0.15 + i * 0.07;
-      const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.4;
+      const lfo = audioCtx.createOscillator(); lfo.frequency.value = 0.12 + i * 0.06;
+      const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.3;
       lfo.connect(lfoG); lfoG.connect(osc.frequency);
       lfo.start();
     });
 
-    // ── Pad espacioso: Dm7 abierto (D2, F2, A2, C3) con ataque muy lento ─
-    const PAD = [73.42, 87.31, 110.00, 130.81];
+    // Pad: 3 voces en celular, 4 en desktop
+    const PAD = DEVICE_TIER === 'phone'
+      ? [73.42, 110.00, 130.81]
+      : [73.42, 87.31, 110.00, 130.81];
     PAD.forEach((freq, i) => {
       const osc = audioCtx.createOscillator();
       osc.type = 'sine'; osc.frequency.value = freq;
       const g = audioCtx.createGain();
       g.gain.setValueAtTime(0, audioCtx.currentTime);
-      g.gain.linearRampToValueAtTime(0.06 / (i + 1), audioCtx.currentTime + 4.0);
-      osc.connect(g); g.connect(reverb);
+      g.gain.linearRampToValueAtTime(0.055 / (i + 1), audioCtx.currentTime + 4.0);
+      osc.connect(g);
+      if (USE_REVERB) g.connect(reverbDest); else g.connect(comp);
       osc.start();
     });
 
-    // ── Gotas de melodía: notas sueltas y espaciadas, escala D menor ─────
+    // Gotas de melodía: 1-2 por compás en celular, 2-3 en desktop
     const DROPS = [220, 261.63, 293.66, 329.63, 392, 440];
-    const MENU_BAR = 6.0; // segundos por "compás" del menú
+    const MENU_BAR = DEVICE_TIER === 'phone' ? 9.0 : 6.0;
     let menuLoopT = audioCtx.currentTime + 1.5;
 
     function scheduleMenuDrop(){
-      // 2-3 gotas por "compás", muy separadas
-      const count = 2 + Math.floor(Math.random() * 2);
+      const maxDrops = DEVICE_TIER === 'phone' ? 2 : 3;
+      const count = 1 + Math.floor(Math.random() * maxDrops);
       for (let n = 0; n < count; n++){
         const t = menuLoopT + (n / count) * MENU_BAR * 0.85 + Math.random() * 0.8;
         const freq = DROPS[Math.floor(Math.random() * DROPS.length)];
@@ -804,10 +847,11 @@
         osc.type = 'sine'; osc.frequency.value = freq * oct;
         const g = audioCtx.createGain();
         g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.07, t + 0.08);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 2.8);
-        osc.connect(g); g.connect(reverb); g.connect(comp);
-        osc.start(t); osc.stop(t + 3.0);
+        g.gain.linearRampToValueAtTime(0.065, t + 0.08);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 2.5);
+        osc.connect(g);
+        if (USE_REVERB) g.connect(reverbDest); else g.connect(comp);
+        osc.start(t); osc.stop(t + 2.7);
       }
       menuLoopT += MENU_BAR;
       const ms = (menuLoopT - audioCtx.currentTime - 0.8) * 1000;
@@ -828,17 +872,14 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  // MOTOR 2 — GAMEPLAY: dinámico, escala con angularSpeed del juego
-  // Tres capas que se activan progresivamente según la velocidad:
-  //   Capa 1 (siempre): bajo pulsante + pad Am7 — ritmo base tranquilo
-  //   Capa 2 (velocidad media): arpejo en corcheas — tensión moderada
-  //   Capa 3 (velocidad alta): percusión sintetizada + arpejo rápido
+  // MOTOR 2 — GAMEPLAY: dinámico, escala con angularSpeed
   // ══════════════════════════════════════════════════════════════════════
-  let gameLayerGains = []; // gains de cada capa, para subirlos/bajarlos
+  let gameLayerGains = [];
 
   function startGameMusic(){
     if (!audioCtx || !soundOn) return;
     stopGameMusic();
+    ensurePercBuffers(); // pre-calcular buffers de perc UNA SOLA VEZ
 
     gameMasterGain = audioCtx.createGain();
     gameMasterGain.gain.setValueAtTime(0, audioCtx.currentTime);
@@ -847,30 +888,30 @@
 
     const comp = makeComp(-14, 4);
     comp.connect(gameMasterGain);
-    const reverb = makeReverb(1.4, 3.5);
-    const rvGain = audioCtx.createGain(); rvGain.gain.value = 0.22;
-    reverb.connect(rvGain); rvGain.connect(comp);
 
-    const BPM = 132; // más rápido que antes, acorde al juego
+    // Reverb más corto en gameplay, y solo en desktop/tablet
+    let reverbDest = comp;
+    if (USE_REVERB){
+      const reverb = makeReverb(0.9, 4.0); // muy corto — solo da "aire" sin cost
+      const rvGain = audioCtx.createGain(); rvGain.gain.value = 0.15;
+      reverb.connect(rvGain); rvGain.connect(comp);
+      reverbDest = reverb;
+    }
+
+    const BPM = 132;
     const BEAT = 60 / BPM;
     const BAR  = BEAT * 4;
-    const SCALE = [110, 130.81, 146.83, 164.81, 196.00, 220.00]; // Am pent.
+    const SCALE = [110, 130.81, 146.83, 164.81, 196.00, 220.00];
 
-    // Capa 0 — base (siempre activa)
-    const baseGain = audioCtx.createGain(); baseGain.gain.value = 1.0;
-    baseGain.connect(comp);
-    // Capa 1 — arpejo (se activa a velocidad media)
-    const arpGain = audioCtx.createGain(); arpGain.gain.value = 0.0;
-    arpGain.connect(comp); arpGain.connect(reverb);
-    // Capa 2 — percusión + arpejo rápido (se activa a velocidad alta)
-    const percGain = audioCtx.createGain(); percGain.gain.value = 0.0;
-    percGain.connect(comp);
+    const baseGain = audioCtx.createGain(); baseGain.gain.value = 1.0; baseGain.connect(comp);
+    const arpGain  = audioCtx.createGain(); arpGain.gain.value  = 0.0; arpGain.connect(comp);
+    if (USE_REVERB) arpGain.connect(reverbDest);
+    const percGain = audioCtx.createGain(); percGain.gain.value = 0.0; percGain.connect(comp);
     gameLayerGains = [baseGain, arpGain, percGain];
 
     gameLoopStart = audioCtx.currentTime + 0.08;
     const LOOP_BARS = 2;
 
-    // ── Bajo pulsante ─────────────────────────────────────────────────────
     function scheduleBass(t0, bars){
       for (let b = 0; b < bars * 4; b++){
         const t = t0 + b * BEAT;
@@ -878,73 +919,71 @@
         osc.type = 'triangle'; osc.frequency.value = 55;
         const g = audioCtx.createGain();
         g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.55, t + 0.015);
+        g.gain.linearRampToValueAtTime(0.5, t + 0.015);
         g.gain.exponentialRampToValueAtTime(0.001, t + BEAT * 0.6);
         osc.connect(g); g.connect(baseGain);
         osc.start(t); osc.stop(t + BEAT * 0.65);
       }
     }
 
-    // ── Pad Am7 ───────────────────────────────────────────────────────────
     function schedulePad(t0, bars){
-      [110, 130.81, 164.81, 196.00].forEach((freq, i) => {
+      // 3 voces en celular, 4 en desktop
+      const FREQS = DEVICE_TIER === 'phone'
+        ? [110, 164.81, 196.00]
+        : [110, 130.81, 164.81, 196.00];
+      FREQS.forEach((freq, i) => {
         const osc = audioCtx.createOscillator();
         osc.type = 'triangle'; osc.frequency.value = freq;
         const dur = BAR * bars;
         const g = audioCtx.createGain();
         g.gain.setValueAtTime(0, t0);
-        g.gain.linearRampToValueAtTime(0.10 / (i + 1), t0 + 0.4);
-        g.gain.setValueAtTime(0.10 / (i + 1), t0 + dur - 0.5);
+        g.gain.linearRampToValueAtTime(0.09 / (i + 1), t0 + 0.4);
+        g.gain.setValueAtTime(0.09 / (i + 1), t0 + dur - 0.5);
         g.gain.linearRampToValueAtTime(0, t0 + dur);
-        osc.connect(g); g.connect(baseGain); g.connect(reverb);
+        osc.connect(g); g.connect(baseGain);
+        if (USE_REVERB) g.connect(reverbDest);
         osc.start(t0); osc.stop(t0 + dur + 0.1);
       });
     }
 
-    // ── Arpejo en corcheas (capa 1) ───────────────────────────────────────
     function scheduleArp(t0, bars, fast){
       const pat = [0, 2, 4, 5, 4, 2, 3, 5];
       const step = fast ? BEAT / 4 : BEAT / 2;
       const total = Math.round(bars * BAR / step);
       for (let s = 0; s < total; s++){
+        // En celular salteamos notas para reducir osciladores simultáneos
+        if (DEVICE_TIER === 'phone' && s % 2 !== 0 && fast) continue;
         const t = t0 + s * step;
         const freq = SCALE[pat[s % pat.length]] * (fast ? 4 : 2);
         const osc = audioCtx.createOscillator();
         osc.type = 'triangle'; osc.frequency.value = freq;
         const g = audioCtx.createGain();
         g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.06, t + 0.008);
+        g.gain.linearRampToValueAtTime(0.055, t + 0.008);
         g.gain.exponentialRampToValueAtTime(0.001, t + step * 0.6);
         osc.connect(g); g.connect(arpGain);
         osc.start(t); osc.stop(t + step * 0.7);
       }
     }
 
-    // ── Percusión sintetizada (capa 2): bombo + hi-hat ───────────────────
     function schedulePerc(t0, bars){
+      // Usa los buffers pre-calculados — cero generación de ruido en el loop
+      const lp = audioCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 200;
+      lp.connect(percGain);
+      const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6000;
+      hp.connect(percGain);
+
       for (let b = 0; b < bars * 4; b++){
         const t = t0 + b * BEAT;
-        // bombo en 1 y 3
         if (b % 2 === 0){
-          const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.18, audioCtx.sampleRate);
-          const d = buf.getChannelData(0);
-          for (let i = 0; i < d.length; i++)
-            d[i] = (Math.random()*2-1) * Math.exp(-i / (audioCtx.sampleRate * 0.04));
-          const src = audioCtx.createBufferSource(); src.buffer = buf;
-          const lp = audioCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 200;
+          const src = audioCtx.createBufferSource(); src.buffer = _kickBuf;
           const g = audioCtx.createGain(); g.gain.value = 0.5;
-          src.connect(lp); lp.connect(g); g.connect(percGain);
+          src.connect(g); g.connect(lp);
           src.start(t);
         }
-        // hi-hat en todos los beats
-        const hbuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.06, audioCtx.sampleRate);
-        const hd = hbuf.getChannelData(0);
-        for (let i = 0; i < hd.length; i++)
-          hd[i] = (Math.random()*2-1) * Math.exp(-i / (audioCtx.sampleRate * 0.012));
-        const hsrc = audioCtx.createBufferSource(); hsrc.buffer = hbuf;
-        const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6000;
-        const hg = audioCtx.createGain(); hg.gain.value = 0.18;
-        hsrc.connect(hp); hp.connect(hg); hg.connect(percGain);
+        const hsrc = audioCtx.createBufferSource(); hsrc.buffer = _hatBuf;
+        const hg = audioCtx.createGain(); hg.gain.value = 0.16;
+        hsrc.connect(hg); hg.connect(hp);
         hsrc.start(t);
       }
     }
@@ -952,26 +991,22 @@
     function scheduleGameLoop(){
       scheduleBass(gameLoopStart, LOOP_BARS);
       schedulePad(gameLoopStart, LOOP_BARS);
-      // La velocidad del juego decide cuántas capas suenan.
-      // angularSpeed va de BASE_SPEED (~1.5) a MAX_SPEED (~4.1).
       const spd = (typeof angularSpeed !== 'undefined') ? angularSpeed : BASE_SPEED;
-      const t = (spd - BASE_SPEED) / (MAX_SPEED - BASE_SPEED); // 0.0 → 1.0
-      if (t > 0.2) scheduleArp(gameLoopStart, LOOP_BARS, t > 0.65);
-      if (t > 0.55) schedulePerc(gameLoopStart, LOOP_BARS);
-
+      const tSpd = (spd - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+      if (tSpd > 0.2) scheduleArp(gameLoopStart, LOOP_BARS, tSpd > 0.65);
+      if (tSpd > 0.55) schedulePerc(gameLoopStart, LOOP_BARS);
       gameLoopStart += BAR * LOOP_BARS;
       const ms = (gameLoopStart - audioCtx.currentTime - 0.6) * 1000;
       gameLoopTimer = setTimeout(scheduleGameLoop, Math.max(ms, 50));
     }
     scheduleGameLoop();
 
-    // ── Ajustador de capas: corre cada 2s, sube/baja las capas según spd ─
     function updateGameLayers(){
       if (!gameMasterGain) return;
       const spd = (typeof angularSpeed !== 'undefined') ? angularSpeed : BASE_SPEED;
-      const t = Math.max(0, Math.min(1, (spd - BASE_SPEED) / (MAX_SPEED - BASE_SPEED)));
-      const arpVol  = t > 0.2 ? Math.min((t - 0.2) / 0.45, 1) : 0;
-      const percVol = t > 0.55 ? Math.min((t - 0.55) / 0.35, 1) : 0;
+      const tSpd = Math.max(0, Math.min(1, (spd - BASE_SPEED) / (MAX_SPEED - BASE_SPEED)));
+      const arpVol  = tSpd > 0.2  ? Math.min((tSpd - 0.2)  / 0.45, 1) : 0;
+      const percVol = tSpd > 0.55 ? Math.min((tSpd - 0.55) / 0.35, 1) : 0;
       const now = audioCtx.currentTime;
       arpGain.gain.setTargetAtTime(arpVol, now, 0.8);
       percGain.gain.setTargetAtTime(percVol * 0.7, now, 0.8);
