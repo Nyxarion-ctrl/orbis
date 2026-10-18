@@ -29,11 +29,12 @@
     display:flex; align-items:center; gap:10px;
   }
   #scoreFrame {
-    padding:8px 22px;
+    padding:8px 22px 10px;
     background:rgba(8,14,26,0.55);
     box-shadow:inset 0 0 0 1px rgba(6,182,212,0.4), 0 0 14px rgba(6,182,212,0.15);
     clip-path:polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
     opacity:0; transition:opacity .3s;
+    display:flex; flex-direction:column; align-items:center; gap:2px;
   }
   #scoreFrame.show { opacity:1; }
   #score {
@@ -42,6 +43,14 @@
     text-shadow:0 0 12px rgba(6,182,212,0.8), 0 0 24px rgba(6,182,212,0.4);
     letter-spacing:2px;
   }
+  #liveRecord {
+    font-family:'Courier New', Consolas, monospace;
+    font-size:10px; font-weight:600; color:#3c5060;
+    letter-spacing:2px; text-transform:uppercase;
+    transition:color .3s;
+  }
+  #liveRecord.beating { color:#fbbf24; text-shadow:0 0 8px rgba(251,191,36,0.7); }
+  #liveRecord.danger  { color:#f87171; text-shadow:0 0 8px rgba(248,113,113,0.5); }
 
   /* ---------- Combo / racha ---------- */
   /* Panel gemelo al de puntaje, en el mismo lenguaje visual (bisel + glow),
@@ -95,6 +104,29 @@
     opacity:0;
   }
   #hitFlash.hit { animation:hitFlashAnim .55s ease-out; }
+  #milestoneFlash {
+    position:fixed; inset:0; pointer-events:none; z-index:3; opacity:0;
+  }
+  #milestoneFlash.pop { animation:milestoneFlashAnim .45s ease-out; }
+  @keyframes milestoneFlashAnim {
+    0%   { opacity:0; }
+    18%  { opacity:1; background:radial-gradient(circle at 50% 50%, rgba(251,191,36,0.18) 0%, rgba(139,92,246,0.12) 60%, transparent 100%); }
+    100% { opacity:0; }
+  }
+  #milestoneText {
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-family:'Courier New', monospace; font-size:clamp(22px,5vw,34px);
+    font-weight:800; letter-spacing:4px; color:#fbbf24;
+    text-shadow:0 0 20px rgba(251,191,36,0.9), 0 0 40px rgba(251,191,36,0.4);
+    pointer-events:none; opacity:0; z-index:4;
+  }
+  #milestoneText.pop { animation:milestoneTextAnim .7s cubic-bezier(.22,1,.36,1) forwards; }
+  @keyframes milestoneTextAnim {
+    0%   { opacity:0; transform:translate(-50%,-50%) scale(0.6); }
+    30%  { opacity:1; transform:translate(-50%,-50%) scale(1.12); }
+    60%  { opacity:1; transform:translate(-50%,-50%) scale(1); }
+    100% { opacity:0; transform:translate(-50%,-58%) scale(0.95); }
+  }
   @keyframes hitFlashAnim {
     0%   { opacity:0; background:radial-gradient(circle at 50% 50%, rgba(255,120,50,0) 40%, rgba(255,60,20,0) 100%); }
     14%  { opacity:1; background:radial-gradient(circle at 50% 50%, rgba(255,150,70,0.22) 0%, rgba(255,45,20,0.8) 100%); }
@@ -365,6 +397,8 @@
 <body>
 <canvas id="c"></canvas>
 <div id="hitFlash"></div>
+<div id="milestoneFlash"></div>
+<div id="milestoneText"></div>
 <div id="fadeOverlay"></div>
 <div id="rotateMsg">
   <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -387,7 +421,7 @@
 
 <div id="ui">
   <div id="hudRow">
-    <div id="scoreFrame"><div id="score">0</div></div>
+    <div id="scoreFrame"><div id="score">0</div><div id="liveRecord"></div></div>
     <div id="comboFrame">
       <div id="comboMult">x2</div>
       <div id="comboBarTrack"><div id="comboBarFill"></div></div>
@@ -442,17 +476,19 @@
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const scoreEl = document.getElementById('score');
-  const scoreFrameEl = document.getElementById('scoreFrame');
+  const scoreFrameEl  = document.getElementById('scoreFrame');
+  const liveRecordEl  = document.getElementById('liveRecord');
   const fadeOverlay  = document.getElementById('fadeOverlay');
 
-  function fadeTransition(callback){
+  function fadeTransition(callback, fast){
     fadeOverlay.classList.add('fade-in');
+    const dur = fast ? 100 : 220;
     setTimeout(() => {
       callback();
       fadeOverlay.classList.remove('fade-in');
       fadeOverlay.classList.add('fade-out');
-      setTimeout(() => fadeOverlay.classList.remove('fade-out'), 300);
-    }, 290);
+      setTimeout(() => fadeOverlay.classList.remove('fade-out'), fast ? 120 : 260);
+    }, dur);
   }
   const startScreen = document.getElementById('startScreen');
   const gameOverScreen = document.getElementById('gameOverScreen');
@@ -469,7 +505,22 @@
   const sfxBtn   = document.getElementById('sfxBtn');
   const pauseBtn = document.getElementById('pauseBtn');
   const menuBtn  = document.getElementById('menuBtn');
-  const hitFlash = document.getElementById('hitFlash');
+  const hitFlash        = document.getElementById('hitFlash');
+  const milestoneFlash  = document.getElementById('milestoneFlash');
+  const milestoneTextEl = document.getElementById('milestoneText');
+  const MILESTONES = [10, 25, 50, 100, 150, 200];
+
+  function triggerMilestone(s){
+    const labels = {10:'¡DESPEGUE!', 25:'¡ORBITAL!', 50:'¡MAESTRO!', 100:'¡LEYENDA!', 150:'¡INVOCADO!', 200:'¡ASCENSIÓN!'};
+    const label = labels[s] || ('¡' + s + '!');
+    milestoneTextEl.textContent = label;
+    milestoneFlash.classList.remove('pop');
+    milestoneTextEl.classList.remove('pop');
+    void milestoneFlash.offsetWidth;
+    milestoneFlash.classList.add('pop');
+    milestoneTextEl.classList.add('pop');
+    try { if (navigator.vibrate) navigator.vibrate([30, 20, 30]); } catch(e){}
+  }
   const comboFrame = document.getElementById('comboFrame');
   const comboMultEl = document.getElementById('comboMult');
   const comboBarFill = document.getElementById('comboBarFill');
@@ -556,9 +607,10 @@
   let sfxOn   = true;
   let paused = false;
 
-  const BASE_SPEED = 1.5;
-  const SPEED_PER_POINT = 0.035;
-  const MAX_SPEED = 4.1;
+  const BASE_SPEED = 1.8;        // arranca con ritmo pero no mata en 3 segundos
+  const SPEED_PER_POINT = 0.036; // escala suave — el pico llega después del score 30
+  const MAX_SPEED = 4.4;         // techo alcanzable por jugadores buenos sin ser injusto
+  const SPAWN_FADE_MS = 220;     // fade-in más corto — menos tiempo "ciego", más tiempo de reacción visible
 
   let player, obstacles, angularSpeed, score, lastCollisionAt;
   let safeRing = 0; // qué anillo garantiza el spawner como libre para el próximo obstáculo
@@ -607,8 +659,8 @@
   if (_isPhoneUA || (_hasTouch && _minDim < 480)) DEVICE_TIER = 'phone';
   else if (_isTabletUA || (_hasTouch && _minDim < 900)) DEVICE_TIER = 'tablet';
   const STAR_COUNT_SCALE = DEVICE_TIER === 'phone' ? 0.45 : DEVICE_TIER === 'tablet' ? 0.7 : 1;
-  const OBSTACLE_WIDTH   = DEVICE_TIER === 'phone' ? 0.22 : DEVICE_TIER === 'tablet' ? 0.28 : 0.34;
-  const CHUNK_SCALE      = DEVICE_TIER === 'phone' ? 0.58 : DEVICE_TIER === 'tablet' ? 0.78 : 1.0;
+  const OBSTACLE_WIDTH   = DEVICE_TIER === 'phone' ? 0.26 : DEVICE_TIER === 'tablet' ? 0.30 : 0.34;
+  const CHUNK_SCALE      = DEVICE_TIER === 'phone' ? 0.72 : DEVICE_TIER === 'tablet' ? 0.88 : 1.15;
 
   let stars = [];
   const STAR_LAYERS = [
@@ -1388,8 +1440,8 @@
       const isCore = i === 0;
       chunks.push({
         angleOffset: (t - 0.5) * width * 0.85 + (Math.random()-0.5)*0.05,
-        radiusJitter: (Math.random() - 0.5) * 8 * CHUNK_SCALE,
-        size: (isCore ? 13 + Math.random() * 5 : 6 + Math.random() * 6) * CHUNK_SCALE,
+        radiusJitter: (Math.random() - 0.5) * 7 * CHUNK_SCALE,  // un poco más contenido
+        size: (isCore ? 12 + Math.random() * 4 : 5 + Math.random() * 5) * CHUNK_SCALE,
         rot: Math.random() * Math.PI * 2,
         rotSpeed: (Math.random() - 0.5) * 1.4,
         shape: randomRockPoints(7 + Math.floor(Math.random() * 3)),
@@ -1410,8 +1462,8 @@
       const isCore = i === 0;
       chunks.push({
         angleOffset: (t - 0.5) * width * 0.85 + (Math.random()-0.5)*0.05,
-        radiusJitter: (Math.random() - 0.5) * 8 * CHUNK_SCALE,
-        size: (isCore ? 12 + Math.random() * 5 : 5 + Math.random() * 5) * CHUNK_SCALE,
+        radiusJitter: (Math.random() - 0.5) * 7 * CHUNK_SCALE,
+        size: (isCore ? 11 + Math.random() * 4 : 5 + Math.random() * 5) * CHUNK_SCALE,
         rot: Math.random() * Math.PI * 2,
         rotSpeed: (Math.random() - 0.5) * 2.0,
         shape: randomCrystalPoints(5 + Math.floor(Math.random() * 3)),
@@ -1519,6 +1571,23 @@
     score += gained;
     scoreEl.textContent = score;
 
+    // Hito redondo — celebración visual + háptico
+    if (MILESTONES.includes(score)) triggerMilestone(score);
+
+    // Récord en vivo — muestra distancia al récord y cambia color según urgencia
+    if (bestScore > 0){
+      const gap = bestScore - score;
+      if (gap > 0){
+        liveRecordEl.textContent = 'RÉCORD A ' + gap;
+        liveRecordEl.className = gap <= 3 ? 'danger' : '';
+      } else {
+        liveRecordEl.textContent = '★ NUEVO RÉCORD';
+        liveRecordEl.className = 'beating';
+      }
+    } else {
+      liveRecordEl.textContent = '';
+    }
+
     const ppx = cx + Math.cos(player.angle) * player.currentRadius;
     const ppy = cy + Math.sin(player.angle) * player.currentRadius - 18;
     if (isPrecision){
@@ -1559,16 +1628,26 @@
     precisionCount = 0;
     resetCombo();
     let a = player.angle + 1.4;
+    const now0 = performance.now();
     for (let i = 0; i < 4; i++){
       const ring = Math.floor(Math.random() * RING_COUNT);
-      obstacles.push({ angle: a, ring, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()) });
+      // born escalonado: el obstáculo más lejano "nació" antes para que su
+      // fade-in termine justo cuando el jugador lo alcanza, no después.
+      const timeToReach = ((a - player.angle) / BASE_SPEED) * 1000;
+      const bornAt = now0 - Math.max(0, timeToReach - SPAWN_FADE_MS);
+      obstacles.push({ angle: a, ring, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()), born: bornAt });
       a += minGap() + Math.random() * 0.4;
     }
     scoreEl.textContent = '0';
+    liveRecordEl.textContent = '';
+    liveRecordEl.className = '';
   }
 
   function minGap(multiplier){
-    return angularSpeed * (0.42 * (multiplier || 1)) + OBSTACLE_WIDTH + 0.2;
+    // Coeficiente 0.65: garantiza tiempo total ≥ 900ms en todo el juego.
+    // Con fade-in de 220ms (85% = 187ms de hitbox inactivo), la reacción
+    // visible nunca baja de ~560ms — dentro del rango humano cómodo.
+    return angularSpeed * (0.65 * (multiplier || 1)) + OBSTACLE_WIDTH + 0.25;
   }
 
   // Cambiar de anillo es cíclico y de a uno (el toque siempre avanza al
@@ -1585,11 +1664,13 @@
     // a partir de cierto progreso, a veces bloquea 2 de los 3 anillos a la vez:
     // hay que ubicarse en el único anillo libre, no solo "cambiar de cualquier forma"
     // (usa totalClears, no score: la dificultad no debe acelerarse por el combo/precisión)
-    const doubleChance = totalClears > 3 ? Math.min(0.18 + totalClears * 0.012, 0.42) : 0;
+    // Doble amenaza: empieza en score 8, sube lento, techo del 28%.
+    // Al 28% es 1 de cada 3.5 obstáculos — tensión frecuente pero no dominante.
+    const doubleChance = totalClears >= 8 ? Math.min(0.06 + (totalClears - 8) * 0.008, 0.28) : 0;
     const isDouble = Math.random() < doubleChance;
 
     let gap = minGap(isDouble ? 1.5 : 1) + Math.random() * 0.35;
-    if (totalClears > 0 && totalClears % 8 === 0) gap *= 1.5; // respiro cada 8 despejes
+    if (totalClears > 0 && totalClears % 6 === 0) gap *= 1.6; // respiro cada 6 despejes
     const angle = afterAngle + gap;
 
     // El anillo libre de ESTE obstáculo siempre está a lo sumo a 1 toque del
@@ -1605,14 +1686,14 @@
       const groupId = ++groupIdSeq;
       for (let r = 0; r < RING_COUNT; r++){
         if (r === nextSafe) continue; // el único anillo libre de esta doble amenaza
-        obstacles.push({ angle, ring: r, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()), warn: true, groupId, groupSize: RING_COUNT - 1 });
+        obstacles.push({ angle, ring: r, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()), warn: true, groupId, groupSize: RING_COUNT - 1, born: performance.now() });
       }
     } else {
       // obstáculo simple: bloquea cualquier anillo menos el seguro, así el
       // camino sigue garantizado aunque el jugador todavía no haya llegado a él
       const blocked = [0, 1, 2].filter(r => r !== nextSafe);
       const ring = blocked[Math.floor(Math.random() * blocked.length)];
-      obstacles.push({ angle, ring, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()) });
+      obstacles.push({ angle, ring, width: OBSTACLE_WIDTH, chunks: buildChunks(OBSTACLE_WIDTH, pickObstacleType()), born: performance.now() });
     }
 
     safeRing = nextSafe;
@@ -1759,7 +1840,7 @@
   document.querySelector('#gameOverScreen .cta').addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     ensureAudio();
-    if (performance.now() - lastCollisionAt > 350) fadeTransition(() => startGame());
+    if (performance.now() - lastCollisionAt > 180) fadeTransition(() => startGame(), true);
   });
   menuBtn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
@@ -1816,6 +1897,7 @@
     _nebulaCache = oc;
   }
   function drawNebula(){
+    if (W <= 0 || H <= 0) return; // aún no hay dimensiones válidas
     if (!_nebulaCache || _nebulaCacheW !== W || _nebulaCacheH !== H) buildNebulaCache();
     ctx.drawImage(_nebulaCache, 0, 0, W, H);
   }
@@ -1887,8 +1969,10 @@
         // En el eje radial el lado que importa es el ancho (±8.5px).
         // En el eje angular convertimos el "medio largo" de la nave a radianes
         // según el radio actual para que el hitbox escale con la órbita.
-        const SHIP_HALF_W = 12 * CHUNK_SCALE;
-        const SHIP_HALF_L = 11 * CHUNK_SCALE;
+        // Ancho real de alas (9px base) + jitter máximo (4px base), todo escalado.
+        // El margen angular usa el largo real de la nave (16px base) / 2.
+        const SHIP_HALF_W = (9 + 4) * CHUNK_SCALE;   // 13px base → escala
+        const SHIP_HALF_L = 8 * CHUNK_SCALE;           // más ajustado que antes — 11 era generoso
 
         // Margen radial: nave real + colchón lerp asintótico
         const sweepLo = Math.min(prevRadius, player.currentRadius) - SHIP_HALF_W;
@@ -1897,16 +1981,34 @@
         for (let i = obstacles.length - 1; i >= 0; i--){
           const o = obstacles[i];
           for (const c of o.chunks) c.rot += c.rotSpeed * dt;
-          const diff = o.angle - player.angle;
+
+          // diff SIN normalizar — para detectar "ya pasó" correctamente.
+          // El obstáculo spawna siempre adelante (diff positivo grande) y
+          // va bajando hacia 0 y luego negativo conforme el jugador lo alcanza.
+          const diffRaw = o.angle - player.angle;
+
+          // diff normalizado a (-π, π] — SOLO para la colisión, para que
+          // un obstáculo a 6.1 rad y el jugador a 0.1 rad se lean como
+          // diff = -0.28 (cerca) en vez de diff = 6.0 (lejos).
+          let diffNorm = diffRaw % (Math.PI * 2);
+          if (diffNorm > Math.PI)  diffNorm -= Math.PI * 2;
+          if (diffNorm < -Math.PI) diffNorm += Math.PI * 2;
+
           const ringRadius = R[o.ring];
-          // Margen angular de la nave en radianes según su radio actual
           const angularHit = o.width / 2 + SHIP_HALF_L / Math.max(player.currentRadius, 1);
-          if (Math.abs(diff) < angularHit && ringRadius >= sweepLo && ringRadius <= sweepHi){
+
+          // Colisión: solo cuando el obstáculo ya es visible (entryAlpha >= 0.85)
+          // Evita la muerte "de la nada" mientras el obstáculo está apareciendo.
+          if ((o.entryAlpha === undefined || o.entryAlpha >= 0.85) &&
+              Math.abs(diffNorm) < angularHit && ringRadius >= sweepLo && ringRadius <= sweepHi){
             const px = cx + Math.cos(player.angle) * player.currentRadius;
             const py = cy + Math.sin(player.angle) * player.currentRadius;
             gameOver(px, py);
           }
-          if (diff < -o.width/2 - 0.05){
+
+          // Despeje: usa diffRaw sin normalizar — igual que antes, funciona
+          // porque el obstáculo siempre spawna con diffRaw positivo y decrece.
+          if (diffRaw < -o.width / 2 - 0.05){
             obstacles.splice(i, 1);
             handleObstacleCleared(o);
             spawnNext(obstacles.length ? obstacles[obstacles.length-1].angle : player.angle + 1.2);
@@ -2100,9 +2202,18 @@
     for (const o of obstacles){
       const midX = cx + Math.cos(o.angle) * R[o.ring];
       const midY = cy + Math.sin(o.angle) * R[o.ring];
-      const glowR = 34 + o.width * R[o.ring] * 0.5;
+      const glowR = (34 + o.width * R[o.ring] * 0.5) * CHUNK_SCALE;
 
-      // aureola de advertencia para los patrones de doble amenaza: se nota antes de llegar
+      // Alpha de entrada: 0 → 1 en SPAWN_FADE_MS desde que nació el obstáculo.
+      // Usa easing suave (cubicOut) para que la aparición se sienta orgánica.
+      const age = nowMs - (o.born || nowMs);
+      const rawT = Math.min(age / SPAWN_FADE_MS, 1);
+      const entryAlpha = 1 - Math.pow(1 - rawT, 3); // ease-out cúbico
+      o.entryAlpha = entryAlpha; // guardamos para el chequeo de colisión
+
+      ctx.globalAlpha = entryAlpha;
+
+      // aureola de advertencia para los patrones de doble amenaza
       if (o.warn){
         const pulse = 0.5 + 0.5 * Math.sin(nowMs / 140);
         const warnR = glowR * 1.6;
@@ -2115,7 +2226,7 @@
         ctx.fill();
       }
 
-      // halo ambiental detrás del grupo de fragmentos (uno solo por obstáculo, barato)
+      // halo ambiental detrás del grupo de fragmentos
       const grad = ctx.createRadialGradient(midX, midY, 0, midX, midY, glowR);
       grad.addColorStop(0, GLOW[o.ring] + '0.30)');
       grad.addColorStop(1, GLOW[o.ring] + '0)');
@@ -2198,6 +2309,7 @@
 
         ctx.restore();
       }
+      ctx.globalAlpha = 1; // restablecer tras cada obstáculo
     }
     ctx.restore();
   }
